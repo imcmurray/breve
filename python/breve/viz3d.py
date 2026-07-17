@@ -117,6 +117,37 @@ def _agent_mesh(
     return verts, cols
 
 
+def _box_edges(pos: np.ndarray, half: np.ndarray, color: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """12 edges of an AABB as line vertices."""
+    hx, hy, hz = float(half[0]), float(half[1]), float(half[2])
+    corners = np.array(
+        [
+            [-hx, -hy, -hz],
+            [hx, -hy, -hz],
+            [hx, -hy, hz],
+            [-hx, -hy, hz],
+            [-hx, hy, -hz],
+            [hx, hy, -hz],
+            [hx, hy, hz],
+            [-hx, hy, hz],
+        ],
+        dtype=np.float32,
+    ) + pos.astype(np.float32)
+    edges = [
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ]
+    verts = []
+    cols = []
+    for a, b in edges:
+        verts.extend(corners[a].tolist())
+        verts.extend(corners[b].tolist())
+        cols.extend(color.tolist())
+        cols.extend(color.tolist())
+    return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
+
+
 def _grid_lines(half: float = 24.0, step: float = 2.0, y: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
     pts: List[float] = []
     cols: List[float] = []
@@ -206,6 +237,17 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
             )
             self.n_points = 0
 
+            self.line_vbo = self.ctx.buffer(reserve=512 * 1024)
+            self.line_cbo = self.ctx.buffer(reserve=512 * 1024)
+            self.line_vao = self.ctx.vertex_array(
+                self.prog,
+                [
+                    (self.line_vbo, "3f", "in_position"),
+                    (self.line_cbo, "3f", "in_color"),
+                ],
+            )
+            self.n_lines = 0
+
             control.engine.running = True
             print(
                 "Controls: drag=orbit  scroll=zoom  SPACE=pause  A=auto-orbit  "
@@ -240,10 +282,14 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
             return np.ascontiguousarray(mvp.T).astype(np.float32).tobytes()
 
         def _rebuild(self) -> None:
+            from breve.shapes import Box, Sphere
+
             tri_v: List[float] = []
             tri_c: List[float] = []
             pt_v: List[float] = []
             pt_c: List[float] = []
+            ln_v: List[float] = []
+            ln_c: List[float] = []
 
             for obj in control.engine.objects:
                 if not obj.enabled or obj.__class__.__name__ == "Floor":
@@ -259,6 +305,20 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
                     ],
                     dtype=np.float32,
                 )
+                shape = obj.shape
+                if isinstance(shape, Box):
+                    half = np.array(
+                        [shape.size.x * 0.5, shape.size.y * 0.5, shape.size.z * 0.5],
+                        dtype=np.float32,
+                    )
+                    # skip enormous ground planes for edge clutter
+                    if max(half) > 40:
+                        continue
+                    v, c = _box_edges(pos, half, col)
+                    ln_v.extend(v.tolist())
+                    ln_c.extend(c.tolist())
+                    continue
+
                 vel = None
                 if hasattr(obj, "velocity"):
                     vel = np.array(
@@ -266,8 +326,10 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
                         dtype=np.float32,
                     )
                 radius = 0.35
-                if obj.shape is not None:
-                    radius = max(0.2, min(1.2, obj.shape.bounding_radius()))
+                if isinstance(shape, Sphere):
+                    radius = max(0.08, min(1.5, float(shape.radius)))
+                elif shape is not None:
+                    radius = max(0.2, min(1.2, shape.bounding_radius()))
 
                 if vel is not None and float(np.linalg.norm(vel)) > 0.05:
                     v, c = _agent_mesh(pos, vel, col, radius * 1.9)
@@ -295,6 +357,15 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
             else:
                 self.n_points = 0
 
+            if ln_v:
+                vb = np.array(ln_v, dtype=np.float32)
+                cb = np.array(ln_c, dtype=np.float32)
+                self.line_vbo.write(vb.tobytes())
+                self.line_cbo.write(cb.tobytes())
+                self.n_lines = len(vb) // 3
+            else:
+                self.n_lines = 0
+
         def on_render(self, time: float, frame_time: float) -> None:
             steps = state["steps"]
             if steps is not None and state["step_count"] >= steps:
@@ -317,6 +388,8 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
             self.prog_pts["u_point_size"] = 16.0
 
             self.grid_vao.render(moderngl.LINES, vertices=self.n_grid)
+            if self.n_lines:
+                self.line_vao.render(moderngl.LINES, vertices=self.n_lines)
             if self.n_agent:
                 self.agent_vao.render(moderngl.TRIANGLES, vertices=self.n_agent)
             if self.n_points:

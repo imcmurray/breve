@@ -106,7 +106,13 @@ class Real(Object):
 
 
 class Stationary(Real):
-    """Collidable body that does not integrate motion."""
+    """Collidable body that does not integrate motion (static physics collider)."""
+
+    def set_shape(self, shape) -> None:
+        super().set_shape(shape)
+        eng = get_engine()
+        if eng.physics_enabled and shape is not None:
+            eng.register_physics_body(self, static=True)
 
 
 class Floor(Stationary):
@@ -120,7 +126,7 @@ class Floor(Stationary):
 
 
 class Mobile(Real):
-    """Movable agent with velocity / acceleration (kinematic in v0)."""
+    """Movable agent — kinematic by default; call enable_physics() for rigid body."""
 
     def __init__(self) -> None:
         self.velocity: Vector = vector(0, 0, 0)
@@ -130,6 +136,8 @@ class Mobile(Real):
         self.wander_range: Vector = vector(10, 10, 10)
         self.max_speed: Optional[float] = None
         self.floor_y: Optional[float] = None
+        self.physics_enabled: bool = False
+        self.mass: float = 1.0
         super().__init__()
 
     def set_velocity(self, v: Vector) -> None:
@@ -189,6 +197,30 @@ class Mobile(Real):
 
     def getAngle(self, other: Real) -> float:  # noqa: N802
         return self.get_angle(other)
+
+    def enable_physics(self, mass: float = 1.0) -> None:
+        """Register this mobile as a dynamic rigid body."""
+        self.physics_enabled = True
+        self.mass = float(mass)
+        get_engine().register_physics_body(self, static=False, mass=self.mass)
+
+    def enablePhysics(self, mass: float = 1.0) -> None:  # noqa: N802
+        self.enable_physics(mass)
+
+    def disable_physics(self) -> None:
+        self.physics_enabled = False
+        get_engine().physics.remove_body(self)
+
+    def disablePhysics(self) -> None:  # noqa: N802
+        self.disable_physics()
+
+    def set_mass(self, mass: float) -> None:
+        self.mass = float(mass)
+        if self.physics_enabled:
+            get_engine().register_physics_body(self, static=False, mass=self.mass)
+
+    def setMass(self, mass: float) -> None:  # noqa: N802
+        self.set_mass(mass)
 
     def iterate(self) -> None:
         """Per-agent hook; override in subclasses."""
@@ -321,3 +353,55 @@ class Control(Abstract):
 
     def stop(self) -> None:
         self.engine.stop()
+
+
+class PhysicalControl(Control):
+    """Controller that turns on world gravity and sensible physics timesteps."""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def init(self) -> None:
+        self.set_integration_step(0.008)
+        self.set_iteration_step(0.02)
+        self.full_gravity()
+        self.enable_lighting()
+        self.point_camera(vector(0, 0, 0), vector(0, 10, 30))
+
+    def set_gravity(self, g: Vector) -> None:
+        self.engine.set_gravity(g if isinstance(g, Vector) else vector(*g))
+
+    def setGravity(self, g: Vector) -> None:  # noqa: N802
+        self.set_gravity(g)
+
+    def full_gravity(self) -> None:
+        self.set_gravity(vector(0.0, -9.8, 0.0))
+
+    def fullGravity(self) -> None:  # noqa: N802
+        self.full_gravity()
+
+    def half_gravity(self) -> None:
+        self.set_gravity(vector(0.0, -4.9, 0.0))
+
+    def halfGravity(self) -> None:  # noqa: N802
+        self.half_gravity()
+
+    def double_gravity(self) -> None:
+        self.set_gravity(vector(0.0, -19.6, 0.0))
+
+    def doubleGravity(self) -> None:  # noqa: N802
+        self.double_gravity()
+
+    def zero_gravity(self) -> None:
+        self.set_gravity(vector(0.0, 0.0, 0.0))
+
+    def zeroGravity(self) -> None:  # noqa: N802
+        self.zero_gravity()
+
+    def enable_shadow_volumes(self) -> None:
+        self.shadows = True
+
+    def enableShadowVolumes(self) -> None:  # noqa: N802
+        self.enable_shadow_volumes()
+
+

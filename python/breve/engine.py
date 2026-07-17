@@ -1,9 +1,10 @@
-"""Simulation engine: timestep loop, neighborhoods, collisions."""
+"""Simulation engine: timestep loop, neighborhoods, physics, collisions."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
+from breve.physics import PhysicsWorld
 from breve.vector import Vector, vector
 
 if TYPE_CHECKING:
@@ -29,9 +30,9 @@ class Engine:
     World stepper.
 
     - Registers Real bodies and the active Control
-    - Integrates kinematic Mobile agents (velocity / acceleration)
-    - Neighborhood queries (spatial hash)
-    - Sphere-ish collision handlers
+    - Integrates kinematic Mobile agents OR rigid-body physics
+    - Neighborhood queries
+    - Sphere collision *handlers* (script callbacks) for non-physics contacts
     """
 
     def __init__(self) -> None:
@@ -43,6 +44,8 @@ class Engine:
         self.running: bool = False
         self._neighbors: Dict[int, List["Real"]] = {}
         self._step_hooks: List = []
+        self.physics = PhysicsWorld()
+        self.physics_enabled: bool = False
 
     def reset(self) -> None:
         self.control = None
@@ -51,6 +54,8 @@ class Engine:
         self.running = False
         self._neighbors.clear()
         self._step_hooks.clear()
+        self.physics.clear()
+        self.physics_enabled = False
 
     def register_control(self, control: "Control") -> None:
         self.control = control
@@ -62,6 +67,7 @@ class Engine:
     def unregister_object(self, obj: "Real") -> None:
         if obj in self.objects:
             self.objects.remove(obj)
+        self.physics.remove_body(obj)
 
     def set_iteration_step(self, dt: float) -> None:
         self.iteration_step = float(dt)
@@ -69,15 +75,19 @@ class Engine:
     def set_integration_step(self, dt: float) -> None:
         self.integration_step = float(dt)
 
+    def set_gravity(self, g: Vector) -> None:
+        self.physics.set_gravity(g.x, g.y, g.z)
+        self.physics_enabled = True
+
+    def enable_physics(self) -> None:
+        self.physics_enabled = True
+
     def add_step_hook(self, fn) -> None:
-        """Optional callback after each step (for viewers)."""
         self._step_hooks.append(fn)
 
     def update_neighbors(self) -> None:
-        """Rebuild neighbor lists for all objects that have a neighborhood size."""
         self._neighbors.clear()
         candidates = [o for o in self.objects if o.enabled]
-        # Group by cell using the max neighborhood among objects (simple + correct)
         for obj in candidates:
             radius = getattr(obj, "neighborhood_size", 0.0) or 0.0
             if radius <= 0:
@@ -96,6 +106,10 @@ class Engine:
     def get_neighbors(self, obj: "Real") -> List["Real"]:
         return self._neighbors.get(id(obj), [])
 
+    def register_physics_body(self, obj: "Real", *, static: bool, mass: float = 1.0) -> None:
+        self.physics_enabled = True
+        self.physics.add_or_update(obj, static=static, mass=mass)
+
     def step(self) -> None:
         """Advance one iteration step (may substep integration)."""
         dt = self.iteration_step
@@ -105,7 +119,7 @@ class Engine:
             h = min(sub, remaining)
             self._integrate(h)
             remaining -= h
-        self._detect_collisions()
+        self._detect_script_collisions()
         for obj in list(self.objects):
             iterate = getattr(obj, "iterate", None)
             if callable(iterate):
@@ -117,10 +131,28 @@ class Engine:
             hook(self)
 
     def _integrate(self, h: float) -> None:
-        from breve.objects import Mobile
+        from breve.objects import Mobile, Stationary
 
+        if self.physics_enabled:
+            # ensure bodies exist for physical mobiles / statics with shapes
+            for obj in self.objects:
+                if not obj.enabled or obj.shape is None:
+                    continue
+                if isinstance(obj, Mobile) and getattr(obj, "physics_enabled", False):
+                    mass = getattr(obj, "mass", 1.0)
+                    self.physics.add_or_update(obj, static=False, mass=mass)
+                elif isinstance(obj, Stationary):
+                    self.physics.add_or_update(obj, static=True, mass=0.0)
+
+            self.physics.sync_from_owners()
+            self.physics.step(h)
+            self.physics.sync_to_owners()
+
+        # kinematic mobiles (no physics flag)
         for obj in self.objects:
             if not isinstance(obj, Mobile) or obj.frozen:
+                continue
+            if getattr(obj, "physics_enabled", False):
                 continue
             if obj.acceleration.length_squared() > 0:
                 obj.velocity = obj.velocity + obj.acceleration * h
@@ -130,28 +162,28 @@ class Engine:
                 obj.location = obj.location + obj.velocity * h
             if obj.rotational_velocity.length_squared() > 0:
                 obj.rotation = obj.rotation + obj.rotational_velocity * h
-            # Optional floor clamp
             if obj.floor_y is not None and obj.location.y < obj.floor_y:
                 obj.location.y = obj.floor_y
                 if obj.velocity.y < 0:
                     obj.velocity.y = 0.0
 
-    def _detect_collisions(self) -> None:
+    def _detect_script_collisions(self) -> None:
+        """Script collision handlers (handle_collisions). Skip rigid-solver pairs."""
         from breve.objects import Floor, Mobile
 
         bodies = [o for o in self.objects if o.shape is not None and o.enabled]
         floors = [o for o in bodies if isinstance(o, Floor)]
         mobiles = [o for o in bodies if isinstance(o, Mobile)]
 
-        # Floor = infinite plane at y=0 (sphere–sphere vs huge box is wrong)
         for floor in floors:
             for mob in mobiles:
+                if getattr(mob, "physics_enabled", False):
+                    continue
                 radius = mob.shape.bounding_radius() if mob.shape else 0.0
                 if mob.location.y - radius <= 0.0:
                     self._fire_collision(mob, floor)
                     self._fire_collision(floor, mob)
 
-        # Sphere–sphere for non-floor pairs
         others = [o for o in bodies if not isinstance(o, Floor)]
         n = len(others)
         for i in range(n):
@@ -159,6 +191,12 @@ class Engine:
             ra = a.shape.bounding_radius() if a.shape else 0.0
             for j in range(i + 1, n):
                 b = others[j]
+                # rigid solver owns contact if both are in the physics world
+                if (
+                    self.physics.get_body(a) is not None
+                    and self.physics.get_body(b) is not None
+                ):
+                    continue
                 rb = b.shape.bounding_radius() if b.shape else 0.0
                 delta = a.location - b.location
                 rsum = ra + rb

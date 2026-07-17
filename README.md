@@ -52,6 +52,8 @@ Hello().run(steps=3)
 | Gatherers | `python demos/gatherers.py` |
 | **Swarm (boids)** | `python demos/swarm.py --steps 200` |
 | Swarm + **3D** | `python demos/swarm.py --viz` |
+| **Gravity** (physics) | `python demos/gravity.py --viz` |
+| **Stack** (wrecking ball) | `python demos/stack.py --viz` |
 
 Full list: [`demos/INDEX.md`](demos/INDEX.md)
 
@@ -74,9 +76,10 @@ REVIVAL.md        # roadmap & architecture decisions
 | Neighborhoods (flocking) | done |
 | Swarm, Fountain, Gatherers demos | done |
 | Interactive **3D** viewer (moderngl) | done |
-| Optional 2D fallback view | done |
-| Rigid-body physics (Rapier) | next |
-| Full 3D renderer / steve language | later (legacy only) |
+| **Rigid-body physics** (pure Python) | done |
+| Gravity + Stack demos | done |
+| Joints / Walker / Rapier backend | next |
+| steve language | later (legacy only) |
 
 Roadmap and decisions: **[`REVIVAL.md`](REVIVAL.md)**
 

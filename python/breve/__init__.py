@@ -14,12 +14,14 @@ from breve.objects import (
     Abstract,
     Real,
     Control,
+    PhysicalControl,
     Mobile,
     Stationary,
     Floor,
 )
 from breve.shapes import Shape, Sphere, Cube, Box
 from breve.util import object_list, create_instances, random_expression
+from breve.physics import PhysicsWorld
 
 __version__ = "0.1.0a1"
 __all__ = [
@@ -34,6 +36,7 @@ __all__ = [
     "Abstract",
     "Real",
     "Control",
+    "PhysicalControl",
     "Mobile",
     "Stationary",
     "Floor",
@@ -44,10 +47,10 @@ __all__ = [
     "object_list",
     "create_instances",
     "random_expression",
+    "PhysicsWorld",
     "__version__",
 ]
 
-# CamelCase aliases for classic auto-converted demos
 objectList = object_list
 createInstances = create_instances
 randomExpression = random_expression

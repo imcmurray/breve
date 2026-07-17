@@ -53,13 +53,20 @@ def create_instances(cls: Type[T], count: int = 1) -> T | object_list:
     return object_list(cls() for _ in range(count))
 
 
-def random_expression(v: Vector) -> Vector:
-    """Classic `randomExpression(vector(a,b,c))` → uniform [0,a)×[0,b)×[0,c)."""
-    return vector(
-        np.random.random() * v.x,
-        np.random.random() * v.y,
-        np.random.random() * v.z,
-    )
+def random_expression(v):
+    """
+    Classic `randomExpression`.
+
+    - vector → uniform [0,x)×[0,y)×[0,z)
+    - number → uniform [0, v)
+    """
+    if isinstance(v, Vector):
+        return vector(
+            np.random.random() * v.x,
+            np.random.random() * v.y,
+            np.random.random() * v.z,
+        )
+    return float(np.random.random() * float(v))
 
 
 # CamelCase aliases used by auto-converted demos
