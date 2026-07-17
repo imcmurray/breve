@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Bouncy — clear gravity arcs + elastic bounces (the “yes, gravity works” demo).
+Bouncy — gravity arcs + elastic bounces with *different masses*.
 
-Several colorful spheres drop with horizontal velocity onto a tilted floor and
-walls so they keep hopping around. No auto-teleport; pure physics.
+Under gravity alone all balls accelerate the same (Galileo). Mass shows up in
+*collisions*: light balls ricochet off heavy ones; heavy balls plow through.
+Size and color encode weight so you can read it in the 3D view.
 """
 
 from __future__ import annotations
@@ -13,6 +14,17 @@ import sys
 
 import breve
 from breve.engine import Engine, set_engine
+
+# name, mass (kg-ish), radius, color (RGB 0-1)
+# Big/dark = heavy; small/bright = light
+BALL_SPECS = [
+    ("feather", 0.25, 0.16, breve.vector(0.95, 0.9, 0.4)),   # light yellow
+    ("ping", 0.40, 0.18, breve.vector(0.4, 0.95, 0.95)),      # light cyan
+    ("tennis", 1.0, 0.24, breve.vector(0.3, 0.85, 0.35)),     # medium green
+    ("baseball", 1.5, 0.26, breve.vector(0.95, 0.55, 0.25)),  # medium orange
+    ("bowling", 6.0, 0.38, breve.vector(0.25, 0.35, 0.85)),  # heavy blue
+    ("cannon", 12.0, 0.45, breve.vector(0.75, 0.15, 0.15)),   # very heavy red
+]
 
 
 class Bouncy(breve.PhysicalControl):
@@ -28,14 +40,12 @@ class Bouncy(breve.PhysicalControl):
         self.enable_lighting()
         self.set_background_color(breve.vector(0.08, 0.1, 0.14))
 
-        # Floor
         floor = breve.Stationary()
         floor.set_shape(breve.Box().init_with(breve.vector(14, 0.2, 10)))
         floor.move(breve.vector(0, -0.1, 0))
         floor.set_color(breve.vector(0.3, 0.35, 0.4))
-        _static(floor, restitution=0.85, friction=0.2)
+        _static(floor, restitution=0.82, friction=0.18)
 
-        # Side walls so balls stay in view and bounce sideways
         for x, sx in ((-6.5, 0.25), (6.5, 0.25)):
             w = breve.Stationary()
             w.set_shape(breve.Box().init_with(breve.vector(sx, 4.0, 10)))
@@ -50,7 +60,6 @@ class Bouncy(breve.PhysicalControl):
             w.set_color(breve.vector(0.35, 0.4, 0.48))
             _static(w, restitution=0.8, friction=0.1)
 
-        # A couple of platforms / ramps (boxes at different heights)
         mid = breve.Stationary()
         mid.set_shape(breve.Box().init_with(breve.vector(3.0, 0.15, 2.0)))
         mid.move(breve.vector(0, 1.0, 0))
@@ -58,70 +67,77 @@ class Bouncy(breve.PhysicalControl):
         _static(mid, restitution=0.75, friction=0.15)
 
         self.balls = breve.object_list()
-        colors = [
-            breve.vector(0.95, 0.25, 0.2),
-            breve.vector(0.25, 0.85, 0.4),
-            breve.vector(0.3, 0.5, 1.0),
-            breve.vector(1.0, 0.85, 0.2),
-            breve.vector(0.9, 0.4, 0.9),
-            breve.vector(0.4, 0.95, 0.95),
-        ]
-        for i, col in enumerate(colors):
-            b = BounceBall()
-            b.setup(
-                loc=breve.vector(-4 + i * 0.3, 3.5 + i * 0.4, -1 + (i % 3) * 0.5),
-                vel=breve.vector(2.5 + i * 0.3, 1.0, (i % 2) * 1.5 - 0.5),
-                color=col,
-                radius=0.22 + (i % 3) * 0.04,
-            )
-            self.balls.append(b)
+        self._spawn_volley(initial=True)
 
         self.point_camera(breve.vector(0, 1.2, 0), breve.vector(10, 6, 12))
         self.camera_zoom = 14.0
-        print(f"Bouncy: {len(self.balls)} balls under gravity — watch them arc and bounce")
-        print("No re-spawns for a few seconds; pure physics. SPACE pauses.")
+        print("Bouncy — different masses (size ≈ weight):")
+        for name, mass, radius, _col in BALL_SPECS:
+            print(f"  {name:10s}  mass={mass:5.2f}  radius={radius:.2f}")
+        print("Heavy (big red/blue) barely budge when light ones hit them.")
+        print("Light (small yellow/cyan) fly off after collisions.")
+
+    def _spawn_volley(self, initial: bool = False):
+        """Drop all mass classes with similar initial speeds so mass shows in impacts."""
+        if not initial:
+            for b in list(self.balls):
+                b.remove()
+            self.balls = breve.object_list()
+
+        # Two groups heading toward each other → clear mass contrast on impact
+        n = len(BALL_SPECS)
+        for i, (name, mass, radius, color) in enumerate(BALL_SPECS):
+            b = BounceBall()
+            # left squad goes right, right squad goes left
+            if i < n // 2:
+                loc = breve.vector(-4.5 + i * 0.15, 3.2 + i * 0.35, -0.8 + i * 0.3)
+                vel = breve.vector(4.5, 1.5, 0.8)
+            else:
+                j = i - n // 2
+                loc = breve.vector(4.5 - j * 0.15, 3.0 + j * 0.35, 0.8 - j * 0.3)
+                vel = breve.vector(-4.5, 1.5, -0.8)
+            b.setup(loc=loc, vel=vel, color=color, radius=radius, mass=mass, name=name)
+            self.balls.append(b)
 
     def iterate(self):
         if self.balls:
             cx = sum(b.location.x for b in self.balls) / len(self.balls)
             cy = sum(b.location.y for b in self.balls) / len(self.balls)
-            self.aim_camera(breve.vector(cx * 0.3, max(0.5, cy * 0.5), 0))
+            self.aim_camera(breve.vector(cx * 0.25, max(0.5, cy * 0.45), 0))
 
-        # Soft re-drop only if everything is basically dead for a while
-        if self.engine.time - self._last_print >= 0.5:
+        if self.engine.time - self._last_print >= 0.6:
             self._last_print = self.engine.time
-            speeds = [breve.length(b.velocity) for b in self.balls]
-            avg = sum(speeds) / max(len(speeds), 1)
-            print(
-                f"t={self.engine.time:5.1f}s  speed_avg={avg:5.2f}  "
-                f"y_avg={sum(b.location.y for b in self.balls)/len(self.balls):5.2f}"
-            )
-            if avg < 0.15 and self.engine.time > 2.0:
-                for i, b in enumerate(self.balls):
-                    b.setup(
-                        loc=breve.vector(-3 + i * 0.4, 4.0 + (i % 3) * 0.5, (i % 3) - 1),
-                        vel=breve.vector(3.0, 2.0, (i % 2) * 2 - 1),
-                        color=b.color,
-                        radius=b.shape.radius if b.shape else 0.25,
-                    )
-                print("  → re-tossed (everything had stopped)")
+            # Per-ball speeds so mass differences are visible in the log
+            parts = []
+            for b in self.balls:
+                parts.append(f"{b.label}:{breve.length(b.velocity):4.1f}")
+            print(f"t={self.engine.time:5.1f}s  speeds[name:|v|]  " + "  ".join(parts))
+
+            avg = sum(breve.length(b.velocity) for b in self.balls) / max(len(self.balls), 1)
+            if avg < 0.2 and self.engine.time > 2.5:
+                self._spawn_volley()
+                print("  → re-tossed (watch heavy vs light on impact)")
         super().iterate()
 
 
 class BounceBall(breve.Mobile):
-    def setup(self, loc, vel, color, radius=0.25):
+    def setup(self, loc, vel, color, radius=0.25, mass=1.0, name="ball"):
+        self.label = name
+        self.mass = float(mass)
         self.set_shape(breve.Sphere().init_with(radius))
         self.set_color(color)
         self.move(loc)
         self.set_velocity(vel)
-        self.mass = 1.0
         self.enable_physics(mass=self.mass)
         body = get_engine().physics.get_body(self)
         if body is not None:
-            body.restitution = 0.88
-            body.friction = 0.12
+            # Slightly bouncier light balls; heavy still elastic but not super-ball
+            body.restitution = 0.92 if mass < 1.0 else (0.8 if mass < 4.0 else 0.7)
+            body.friction = 0.1 if mass < 1.0 else 0.2
             body.position[:] = [loc.x, loc.y, loc.z]
             body.velocity[:] = [vel.x, vel.y, vel.z]
+            body.mass = self.mass
+            body.inv_mass = 0.0 if body.static else 1.0 / max(self.mass, 1e-6)
             body.awake = True
         return self
 
@@ -140,7 +156,7 @@ def get_engine():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Breve bouncy balls under gravity")
+    parser = argparse.ArgumentParser(description="Breve bouncy balls with different masses")
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--viz", action="store_true")
     parser.add_argument("--seed", type=int, default=None)

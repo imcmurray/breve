@@ -48,6 +48,7 @@ class Gravity(breve.PhysicalControl):
             gb.restitution = 0.7
             gb.friction = 0.25
 
+        Ball._tier_i = 0
         self.balls = breve.create_instances(Ball, 10)
         # Stagger initial drops
         for i, b in enumerate(self.balls):
@@ -56,8 +57,9 @@ class Gravity(breve.PhysicalControl):
         self.point_camera(breve.vector(2.0, 0.2, 0.0), breve.vector(8.0, 4.0, 10.0))
         self.camera_zoom = 12.0
         self._last_print = -1.0
-        print(f"Gravity: {len(self.balls)} balls — they re-launch when settled")
-        print("If the window looks still, wait 1s — a new volley drops from the top.")
+        print(f"Gravity: {len(self.balls)} balls with mixed masses (size/color = weight)")
+        print("  light = small yellow/green  ·  heavy = big orange/red")
+        print("They re-launch when settled. Heavy ones knock lights around on impact.")
 
     def iterate(self):
         # Camera follows the action
@@ -92,24 +94,37 @@ class Step(breve.Stationary):
         return self
 
 
+# mass tiers for staircase balls (size + color encode weight)
+_MASS_TIERS = [
+    # mass, radius, base color
+    (0.3, 0.10, breve.vector(0.95, 0.9, 0.35)),   # light
+    (0.8, 0.14, breve.vector(0.35, 0.9, 0.45)),
+    (1.5, 0.18, breve.vector(0.35, 0.55, 0.95)),
+    (4.0, 0.24, breve.vector(0.9, 0.4, 0.2)),
+    (9.0, 0.30, breve.vector(0.75, 0.15, 0.2)),   # heavy
+]
+
+
 class Ball(breve.Mobile):
+    _tier_i = 0
+
     def init(self):
         self.cooldown = 0.0
-        r = 0.12 + breve.random_expression(0.10)
-        self.set_shape(breve.Sphere().init_with(r))
-        self.mass = max(0.4, r * 10)
+        tier = _MASS_TIERS[Ball._tier_i % len(_MASS_TIERS)]
+        Ball._tier_i += 1
+        self.mass, self._radius, self._base_color = tier
+        self.set_shape(breve.Sphere().init_with(self._radius))
         self.enable_physics(mass=self.mass)
         body = get_engine().physics.get_body(self)
         if body:
-            body.restitution = 0.75
-            body.friction = 0.18
+            body.restitution = 0.82 if self.mass < 2 else 0.7
+            body.friction = 0.15 if self.mass < 2 else 0.25
         self.reset()
 
     def iterate(self):
         eng = get_engine()
         self.cooldown = max(0.0, self.cooldown - eng.iteration_step)
         speed = breve.length(self.velocity)
-        # Re-launch when fallen off, flown away, or settled (even on a step)
         settled = speed < 0.4
         if self.cooldown <= 0 and (
             self.location.y < -2.5
@@ -121,14 +136,15 @@ class Ball(breve.Mobile):
             self.cooldown = 0.5 + breve.random_expression(1.2)
 
     def reset(self):
+        # Keep mass/size; jitter color slightly around the tier color
         self.set_color(
-            breve.vector(0.3, 0.45, 0.85)
-            + breve.random_expression(breve.vector(0.7, 0.4, 0.15))
+            self._base_color + breve.random_expression(breve.vector(0.08, 0.08, 0.08))
         )
         self.move(
             breve.vector(-1.6, 2.8, -0.5)
             + breve.random_expression(breve.vector(1.2, 0.6, 1.0))
         )
+        # Same-ish launch speed — mass difference shows when they collide
         self.set_velocity(
             breve.vector(
                 1.5 + breve.random_expression(1.5),
@@ -141,9 +157,11 @@ class Ball(breve.Mobile):
         if body is not None:
             body.position[:] = [self.location.x, self.location.y, self.location.z]
             body.velocity[:] = [self.velocity.x, self.velocity.y, self.velocity.z]
+            body.mass = self.mass
+            body.inv_mass = 1.0 / max(self.mass, 1e-6)
             body.awake = True
-            body.restitution = 0.75
-            body.friction = 0.18
+            body.restitution = 0.82 if self.mass < 2 else 0.7
+            body.friction = 0.15 if self.mass < 2 else 0.25
 
 
 def get_engine():
