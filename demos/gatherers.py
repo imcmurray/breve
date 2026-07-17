@@ -132,11 +132,26 @@ def get_engine_control() -> Gatherers:
     return eng.control  # type: ignore[return-value]
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Breve gatherers demo")
+    parser.add_argument("--steps", type=int, default=100)
+    parser.add_argument("--viz", action="store_true")
+    args = parser.parse_args(argv)
+
     set_engine(Engine())
-    # ensure Food is visible as name for handlers
     sim = Gatherers()
-    sim.run(steps=100)
+    if args.viz:
+        try:
+            from breve.viz import run_with_viewer
+
+            run_with_viewer(sim, steps=args.steps)
+            return
+        except ImportError:
+            print("viz deps missing; pip install -e '.[viz]'", file=sys.stderr)
+    sim.run(steps=args.steps)
     print("done.")
 
 

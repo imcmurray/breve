@@ -242,30 +242,35 @@ class Bird(breve.Mobile):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Breve swarm / boids demo")
-    parser.add_argument("--steps", type=int, default=200)
+    parser.add_argument("--steps", type=int, default=None, help="Step budget (default: 200 headless, unlimited with --viz)")
     parser.add_argument("--birds", type=int, default=80)
     parser.add_argument("--mode", choices=("normal", "obedient", "wacky"), default="normal")
-    parser.add_argument("--viz", action="store_true", help="Open 2D projection viewer (pyglet)")
+    parser.add_argument("--viz", action="store_true", help="Open interactive 3D viewer")
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args(argv)
 
     if args.seed is not None:
         np.random.seed(args.seed)
 
+    steps = args.steps
+    if steps is None:
+        steps = None if args.viz else 200
+
     set_engine(Engine())
     sim = Swarm(n_birds=args.birds, mode=args.mode)
 
     if args.viz:
         try:
-            from breve.viz_pyglet import run_with_viewer
+            from breve.viz import run_with_viewer
 
-            run_with_viewer(sim, steps=args.steps)
+            print("3D viewer: drag to orbit, scroll zoom, SPACE pause, A auto-orbit, ESC quit")
+            run_with_viewer(sim, steps=steps)
             return
         except ImportError:
-            print("pyglet not installed; pip install -e '.[viz]'", file=sys.stderr)
+            print("viz deps missing; pip install -e '.[viz]'", file=sys.stderr)
             print("Falling back to headless.", file=sys.stderr)
 
-    sim.run(steps=args.steps)
+    sim.run(steps=steps if steps is not None else 200)
     print("done.")
 
 

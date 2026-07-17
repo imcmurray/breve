@@ -72,12 +72,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.viz:
         try:
-            from breve.viz_pyglet import run_with_viewer
+            from breve.viz import run_with_viewer
 
             run_with_viewer(sim, steps=args.steps)
             return
         except ImportError:
-            print("pyglet not installed; run: pip install -e '.[viz]'", file=sys.stderr)
+            print("viz deps missing; run: pip install -e '.[viz]'", file=sys.stderr)
             print("Falling back to headless.", file=sys.stderr)
 
     sim.run(steps=args.steps)

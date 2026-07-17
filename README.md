@@ -11,11 +11,12 @@ pytest -q
 python demos/swarm.py --steps 150
 ```
 
-Optional live top-down view:
+Optional **interactive 3D** view (orbit camera, velocity-aligned agents):
 
 ```bash
 pip install -e ".[viz]"
 python demos/swarm.py --viz
+# drag = orbit · scroll = zoom · SPACE = pause · A = auto-orbit · ESC = quit
 ```
 
 ## Why breve?
@@ -50,7 +51,7 @@ Hello().run(steps=3)
 | Fountain | `python demos/fountain.py --steps 50` |
 | Gatherers | `python demos/gatherers.py` |
 | **Swarm (boids)** | `python demos/swarm.py --steps 200` |
-| Swarm + viz | `python demos/swarm.py --viz` |
+| Swarm + **3D** | `python demos/swarm.py --viz` |
 
 Full list: [`demos/INDEX.md`](demos/INDEX.md)
 
@@ -72,7 +73,8 @@ REVIVAL.md        # roadmap & architecture decisions
 | Kinematic integration, collisions | done |
 | Neighborhoods (flocking) | done |
 | Swarm, Fountain, Gatherers demos | done |
-| Optional pyglet 2D view | done |
+| Interactive **3D** viewer (moderngl) | done |
+| Optional 2D fallback view | done |
 | Rigid-body physics (Rapier) | next |
 | Full 3D renderer / steve language | later (legacy only) |
 

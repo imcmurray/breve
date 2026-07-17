@@ -253,11 +253,12 @@ HelloWorld()
 
 ## 11. Immediate next work (ordered)
 
-1. Rigid-body physics spike (Rapier via PyO3 *or* thin PyBullet adapter) for Gravity/Walker-lite
-2. Spatial hash for neighborhoods (scale past ~500 agents)
-3. True 3D viewer (moderngl or Bevy sidecar)
-4. Port Braitenberg + PatchLife
+1. ~~True 3D viewer (moderngl-window)~~ **done** — orbit camera, chevrons, grid
+2. **Rigid-body physics** (Rapier via PyO3 *or* thin PyBullet) for Gravity/Walker — next biggest differentiator vs “just boids”
+3. Spatial hash for neighborhoods (scale past ~500 agents)
+4. Port Braitenberg + PatchLife (curriculum demos)
 5. Publish package to TestPyPI
+6. Better materials/lighting / optional Bevy sidecar later
 
 ---
 

@@ -28,6 +28,9 @@ dependencies = [
 [project.optional-dependencies]
 viz = [
   "pyglet>=2.0",
+  "moderngl>=5.8",
+  "moderngl-window>=2.4",
+  "pyglm>=2.7",
 ]
 dev = [
   "pytest>=7.0",

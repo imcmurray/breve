@@ -8,15 +8,19 @@
 | Fountain | `python demos/fountain.py --steps 50` | Particles under gravity |
 | Gatherers | `python demos/gatherers.py` | Collision-driven pickup |
 | **Swarm** | `python demos/swarm.py --steps 200` | Boids flocking (classic showpiece) |
-| Swarm (viz) | `python demos/swarm.py --viz` | Top-down live view (needs `pip install -e '.[viz]'`) |
+| Swarm **3D** | `python demos/swarm.py --viz` | Interactive 3D orbit view (`pip install -e '.[viz]'`) |
 
-### Swarm keys (with `--viz`)
+### Swarm 3D controls (`--viz`)
 
-| Key | Action |
-|-----|--------|
+| Input | Action |
+|-------|--------|
+| Drag | Orbit camera |
+| Scroll | Zoom |
 | Space | Pause / resume |
+| A | Toggle auto-orbit |
 | N / O / W | Flock normal / obedient / wacky |
 | S | Squish birds to origin |
+| R | Reset camera |
 | Esc | Quit |
 
 ## Classic (legacy engine — reference only)
