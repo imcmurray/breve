@@ -1,0 +1,16 @@
+{
+  "title": "flock_swarm",
+  "mode": "kinematic",
+  "background": [0.06, 0.09, 0.14],
+  "camera": { "target": [0, 3, 0], "zoom": 18 },
+  "notes": "Classic breve DNA: local rules → flocking. Cyan agents seek neighbors in 3D.",
+  "agents": [
+    {
+      "behavior": "flock",
+      "count": 45,
+      "color": [0.45, 0.85, 1.0],
+      "radius": 0.22,
+      "spread": 10
+    }
+  ]
+}

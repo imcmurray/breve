@@ -43,21 +43,26 @@ class Hello(breve.Control):
 Hello().run(steps=3)
 ```
 
-## Web UI (recommended) — chat + live 3D in the browser
+## Web UI (the product) — chat + live 3D in the browser
 
 ```bash
 pip install -e ".[webai]"
-export XAI_API_KEY=xai-...    # https://console.x.ai  (or paste key in the UI)
+export XAI_API_KEY=xai-...    # optional — https://console.x.ai  (or paste in UI)
 breve-web
 # open http://127.0.0.1:8765
 ```
 
-In the browser:
+**On open, a gravity demo auto-plays** — no empty canvas, no API key required.
 
-1. Paste an **xAI API key** (optional if `XAI_API_KEY` is already set on the server)
-2. Type what you want: *“heavy and light balls so I can see gravity”*
-3. **Build scene** → Grok returns a scene → simulation streams into the **three.js** view
-4. Drag to orbit, scroll to zoom · Pause / Reset · Load examples without AI
+| Feature | How |
+|---------|-----|
+| **Curriculum chips** | Gravity · Stairs · Wrecking ball · Flock |
+| **Chat → scene** | Paste xAI key, describe a world, **Build scene** |
+| **Refine** | “make gravity stronger”, “add a heavy ball” |
+| **Share** | Copies `/?s=…` link with the full scene encoded |
+| **Example links** | `/?example=example_flock` |
+
+Deploy: see **[DEPLOY.md](DEPLOY.md)** (Docker, Fly, Railway).
 
 ## CLI AI builder (optional)
 

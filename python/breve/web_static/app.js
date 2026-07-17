@@ -1,5 +1,6 @@
 /**
- * breve web UI — chat → scene JSON → live 3D via WebSocket + three.js
+ * breve web UI — chat → scene → live 3D
+ * + autoplay default demo, curriculum chips, shareable ?s= / ?example= links
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -10,11 +11,12 @@ const state = {
   scene: null,
   sessionId: null,
   ws: null,
-  meshes: new Map(), // id -> THREE.Object3D
+  meshes: new Map(),
   paused: false,
+  shareToken: null,
 };
 
-const SUGGESTIONS = [
+const AI_PROMPTS = [
   "Heavy red bowling ball and light yellow ping-pong balls bouncing on a floor so I can see gravity and mass",
   "Staircase with mixed-mass balls rolling down",
   "Flock of 50 cyan birds in open space",
@@ -46,8 +48,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.target.set(0, 1, 0);
 
-const hemi = new THREE.HemisphereLight(0xb0c4ff, 0x223311, 1.1);
-scene3.add(hemi);
+scene3.add(new THREE.HemisphereLight(0xb0c4ff, 0x223311, 1.1));
 const dir = new THREE.DirectionalLight(0xffffff, 1.0);
 dir.position.set(8, 16, 6);
 dir.castShadow = true;
@@ -87,25 +88,21 @@ function colorFromArr(c) {
 function ensureMesh(obj) {
   let mesh = state.meshes.get(obj.id);
   if (mesh) return mesh;
-
   const mat = new THREE.MeshStandardMaterial({
     color: colorFromArr(obj.color),
     metalness: 0.15,
     roughness: 0.55,
   });
-
   let geo;
   if (obj.type === "box") {
     const s = obj.size || [1, 1, 1];
     geo = new THREE.BoxGeometry(s[0], s[1], s[2]);
   } else {
-    const r = obj.radius || 0.25;
-    geo = new THREE.SphereGeometry(r, 24, 16);
+    geo = new THREE.SphereGeometry(obj.radius || 0.25, 24, 16);
   }
   mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  mesh.userData = { type: obj.type };
   scene3.add(mesh);
   state.meshes.set(obj.id, mesh);
   return mesh;
@@ -116,34 +113,35 @@ function applyState(simState) {
   const live = new Set();
   for (const obj of simState.objects || []) {
     live.add(obj.id);
-    // skip huge ground planes for mesh spam? still show them
-    if (obj.type === "box" && obj.size) {
-      const maxS = Math.max(...obj.size);
-      if (maxS > 50) continue;
-    }
+    if (obj.type === "box" && obj.size && Math.max(...obj.size) > 50) continue;
     const mesh = ensureMesh(obj);
     mesh.position.set(obj.pos[0], obj.pos[1], obj.pos[2]);
     mesh.material.color.copy(colorFromArr(obj.color));
   }
-  // remove stale
   for (const id of [...state.meshes.keys()]) {
     if (!live.has(id)) {
-      const m = state.meshes.get(id);
-      scene3.remove(m);
+      scene3.remove(state.meshes.get(id));
       state.meshes.delete(id);
     }
   }
-
   if (simState.background) {
     const b = simState.background;
     scene3.background = new THREE.Color(b[0] * 0.35, b[1] * 0.35, b[2] * 0.4 + 0.05);
   }
   if (simState.camera?.target) {
     const t = simState.camera.target;
-    controls.target.set(t[0], t[1], t[2]);
+    controls.target.lerp(new THREE.Vector3(t[0], t[1], t[2]), 0.08);
   }
   $("hudTitle").textContent = simState.title || "breve";
-  $("hudTime").textContent = `t=${(simState.time || 0).toFixed(1)}s · objects=${(simState.objects || []).length}`;
+  $("hudTime").textContent = `t=${(simState.time || 0).toFixed(1)}s · n=${(simState.objects || []).length}`;
+}
+
+function frameCamera(simState) {
+  if (!simState?.camera?.target) return;
+  const t = simState.camera.target;
+  const z = simState.camera.zoom || 12;
+  controls.target.set(t[0], t[1], t[2]);
+  camera.position.set(t[0] + z * 0.6, t[1] + z * 0.35, t[2] + z * 0.7);
 }
 
 function animate() {
@@ -153,6 +151,9 @@ function animate() {
   renderer.render(scene3, camera);
 }
 animate();
+
+// fade welcome tip
+setTimeout(() => $("welcome")?.classList.add("fade"), 6000);
 
 // --- UI helpers -------------------------------------------------------------
 
@@ -164,8 +165,19 @@ function addBubble(text, role) {
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
 }
 
-function setOverlay(show) {
+function setOverlay(show, title, body) {
   $("overlay").classList.toggle("hidden", !show);
+  if (title) $("overlayTitle").textContent = title;
+  if (body) $("overlayBody").textContent = body;
+}
+
+function toast(msg, isError = false) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.toggle("error", !!isError);
+  el.classList.remove("hidden");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.add("hidden"), 2800);
 }
 
 function getKey() {
@@ -177,15 +189,16 @@ $("apiKey").addEventListener("change", () => {
   const v = $("apiKey").value.trim();
   if (v) localStorage.setItem("breve_xai_key", v);
   else localStorage.removeItem("breve_xai_key");
+  refreshStatus();
 });
 
-// chips
+// AI prompt chips
 const chips = $("chips");
-for (const s of SUGGESTIONS) {
+for (const s of AI_PROMPTS) {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "chip";
-  b.textContent = s.length > 48 ? s.slice(0, 46) + "…" : s;
+  b.textContent = s.length > 42 ? s.slice(0, 40) + "…" : s;
   b.title = s;
   b.addEventListener("click", () => {
     $("prompt").value = s;
@@ -200,22 +213,42 @@ async function refreshStatus() {
     const j = await r.json();
     const el = $("keyStatus");
     if (j.has_server_key) {
-      el.textContent = `Server has XAI_API_KEY · v${j.version}`;
+      el.textContent = `Server key ready · v${j.version} · AI chat on`;
       el.className = "hint ok";
     } else if (getKey()) {
-      el.textContent = `Using key from this browser · v${j.version}`;
+      el.textContent = `Browser key ready · v${j.version}`;
       el.className = "hint ok";
     } else {
-      el.textContent = "No API key — paste xAI key above or set XAI_API_KEY on the server";
-      el.className = "hint bad";
+      el.textContent = "No API key — examples still work; paste xAI key to chat-build";
+      el.className = "hint";
     }
   } catch {
-    $("keyStatus").textContent = "Cannot reach API";
+    $("keyStatus").textContent = "API unreachable";
     $("keyStatus").className = "hint bad";
   }
 }
 
-async function loadExamples() {
+// --- curriculum + examples --------------------------------------------------
+
+async function loadCurriculum() {
+  const r = await fetch("/api/curriculum");
+  const j = await r.json();
+  const box = $("curriculumChips");
+  box.innerHTML = "";
+  for (const c of j.curriculum || []) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip curriculum";
+    b.dataset.id = c.id;
+    b.textContent = c.label;
+    b.title = c.blurb || c.notes || c.label;
+    b.addEventListener("click", () => loadExampleById(c.id, true));
+    box.appendChild(b);
+  }
+  return j;
+}
+
+async function loadExamplesSelect() {
   const r = await fetch("/api/examples");
   const j = await r.json();
   const sel = $("exampleSelect");
@@ -227,25 +260,86 @@ async function loadExamples() {
   }
 }
 
+function markCurriculumActive(id) {
+  document.querySelectorAll("#curriculumChips .chip").forEach((el) => {
+    el.classList.toggle("active", el.dataset.id === id);
+  });
+}
+
+async function loadExampleById(id, fromChip = false) {
+  setOverlay(true, "Loading demo…", "Starting physics / agents in the browser.");
+  try {
+    const r = await fetch(`/api/examples/${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error("Example not found");
+    const scene = await r.json();
+    state.scene = scene;
+    state.shareToken = null;
+    markCurriculumActive(id);
+    if (fromChip) {
+      addBubble(`Curriculum: ${scene.title || id}`, "system");
+      if (scene.notes) addBubble(scene.notes, "assistant");
+    }
+    // update URL without reload (shareable example link)
+    const url = new URL(location.href);
+    url.searchParams.delete("s");
+    url.searchParams.set("example", id);
+    history.replaceState({}, "", url);
+    $("simStatus").textContent = `Demo “${scene.title || id}” — running`;
+    await startSession(scene);
+  } catch (e) {
+    addBubble(String(e), "system");
+    toast(String(e), true);
+  } finally {
+    setOverlay(false);
+  }
+}
+
 $("loadExampleBtn").addEventListener("click", async () => {
   const id = $("exampleSelect").value;
   if (!id) return;
-  const r = await fetch(`/api/examples/${id}`);
-  if (!r.ok) {
-    addBubble("Failed to load example", "system");
+  await loadExampleById(id, true);
+});
+
+// --- share ------------------------------------------------------------------
+
+async function copyShareLink() {
+  if (!state.scene) {
+    toast("Nothing to share yet", true);
     return;
   }
-  state.scene = await r.json();
-  addBubble(`Loaded example “${state.scene.title || id}”`, "system");
-  if (state.scene.notes) addBubble(state.scene.notes, "assistant");
-  $("simStatus").textContent = "Example loaded — press Run";
-  await startSession(state.scene);
-});
+  $("shareStatus").textContent = "Creating link…";
+  try {
+    const r = await fetch("/api/share", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene: state.scene }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "Share failed");
+    if (!j.ok) {
+      toast("Scene is large — link may break in some browsers", true);
+    }
+    state.shareToken = j.token;
+    const full = `${location.origin}/?s=${j.token}`;
+    // also set example-style clean URL when possible is harder; use s=
+    await navigator.clipboard.writeText(full);
+    history.replaceState({}, "", `/?s=${j.token}`);
+    $("shareStatus").textContent = "Link copied to clipboard";
+    $("shareStatus").className = "hint share-status ok";
+    toast("Share link copied");
+  } catch (e) {
+    $("shareStatus").textContent = String(e);
+    $("shareStatus").className = "hint share-status";
+    toast(String(e), true);
+  }
+}
+
+$("shareBtn").addEventListener("click", copyShareLink);
 
 // --- chat -------------------------------------------------------------------
 
 async function buildFromPrompt(message, refine) {
-  setOverlay(true);
+  setOverlay(true, "Building scene…", "Grok is composing floors, masses, and framing.");
   $("sendBtn").disabled = true;
   addBubble(message, "user");
   try {
@@ -261,15 +355,23 @@ async function buildFromPrompt(message, refine) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      addBubble(j.detail || r.statusText || "Request failed", "system");
+      const detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail || r.statusText);
+      addBubble(detail || "Request failed", "system");
+      toast(detail || "AI request failed", true);
       return;
     }
     state.scene = j.scene;
+    state.shareToken = j.share_token || null;
+    markCurriculumActive("");
     addBubble(j.explanation || "Scene ready.", "assistant");
-    $("simStatus").textContent = `Scene “${j.title || "untitled"}” ready — running…`;
+    if (j.share_token) {
+      history.replaceState({}, "", `/?s=${j.share_token}`);
+    }
+    $("simStatus").textContent = `“${j.title || "untitled"}” — running`;
     await startSession(state.scene);
   } catch (e) {
     addBubble(String(e), "system");
+    toast(String(e), true);
   } finally {
     setOverlay(false);
     $("sendBtn").disabled = false;
@@ -291,14 +393,14 @@ $("refineBtn").addEventListener("click", () => {
     return;
   }
   if (!state.scene) {
-    addBubble("Build a scene first, then refine it.", "system");
+    addBubble("Build or load a scene first, then refine.", "system");
     return;
   }
   $("prompt").value = "";
   buildFromPrompt(msg, true);
 });
 
-// --- simulation session -----------------------------------------------------
+// --- simulation -------------------------------------------------------------
 
 async function startSession(sceneSpec) {
   stopWs();
@@ -316,15 +418,9 @@ async function startSession(sceneSpec) {
   state.sessionId = j.session_id;
   state.paused = false;
   applyState(j.state);
-  // frame camera once
-  if (j.state?.camera?.target) {
-    const t = j.state.camera.target;
-    const z = j.state.camera.zoom || 12;
-    controls.target.set(t[0], t[1], t[2]);
-    camera.position.set(t[0] + z * 0.6, t[1] + z * 0.35, t[2] + z * 0.7);
-  }
+  frameCamera(j.state);
   connectWs(j.session_id);
-  $("simStatus").textContent = `Running session ${j.session_id}`;
+  $("simStatus").textContent = `Running · session ${j.session_id}`;
 }
 
 function stopWs() {
@@ -349,9 +445,8 @@ function connectWs(sessionId) {
     }
   };
   ws.onclose = () => {
-    if (state.ws === ws) $("simStatus").textContent = "Simulation socket closed";
+    if (state.ws === ws) $("simStatus").textContent = "Socket closed — press Run";
   };
-  ws.onerror = () => addBubble("WebSocket error", "system");
 }
 
 function sendCmd(cmd) {
@@ -383,10 +478,54 @@ $("resetBtn").addEventListener("click", () => {
   $("simStatus").textContent = "Reset";
 });
 
-// boot
-addBubble(
-  "Describe a 3D world in plain English. Grok builds a safe scene (floors, masses, flocks). Then watch it live — drag to orbit, scroll to zoom.",
-  "system"
-);
-refreshStatus();
-loadExamples();
+// --- boot: URL params → autoplay --------------------------------------------
+
+async function boot() {
+  addBubble(
+    "Welcome. A live demo starts automatically — no API key needed. Drag the 3D view. Use curriculum chips, or paste an xAI key and describe a new world.",
+    "system"
+  );
+  await refreshStatus();
+  await loadCurriculum();
+  await loadExamplesSelect();
+
+  const params = new URLSearchParams(location.search);
+  const shareToken = params.get("s");
+  const exampleId = params.get("example");
+
+  try {
+    if (shareToken) {
+      setOverlay(true, "Opening shared scene…", "Decoding link and starting simulation.");
+      const r = await fetch(`/api/share/${encodeURIComponent(shareToken)}`);
+      const scene = await r.json();
+      if (!r.ok) throw new Error(scene.detail || "Bad share link");
+      state.scene = scene;
+      state.shareToken = shareToken;
+      addBubble(`Opened shared scene “${scene.title || "untitled"}”`, "system");
+      if (scene.notes) addBubble(scene.notes, "assistant");
+      $("simStatus").textContent = "Shared scene — running";
+      await startSession(scene);
+    } else if (exampleId) {
+      await loadExampleById(exampleId, true);
+    } else {
+      // HUGE WIN: never show an empty canvas
+      await loadExampleById("example_gravity", false);
+      addBubble(
+        "Auto-playing “heavy vs light” gravity demo. Try curriculum chips, or Share this view.",
+        "system"
+      );
+    }
+  } catch (e) {
+    addBubble(`Boot: ${e}`, "system");
+    // fallback
+    try {
+      await loadExampleById("example_gravity", false);
+    } catch (_) {
+      $("simStatus").textContent = "Could not auto-start — pick a curriculum chip";
+    }
+  } finally {
+    setOverlay(false);
+  }
+}
+
+boot();

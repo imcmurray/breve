@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>breve — AI 3D multi-agent sandbox</title>
+  <meta name="description" content="Describe a 3D multi-agent or gravity world in English. Grok builds it. Watch it live." />
   <link rel="stylesheet" href="/static/style.css" />
   <script type="importmap">
   {
@@ -19,26 +20,31 @@
     <aside id="sidebar">
       <header class="brand">
         <h1>breve</h1>
-        <p class="tag">AI scene builder · continuous 3D agents</p>
+        <p class="tag">Talk to a world · continuous 3D multi-agent</p>
       </header>
 
       <section class="panel settings">
         <label class="field">
-          <span>xAI API key</span>
-          <input id="apiKey" type="password" placeholder="xai-… (or set XAI_API_KEY)" autocomplete="off" />
+          <span>xAI API key <em>(optional for examples)</em></span>
+          <input id="apiKey" type="password" placeholder="xai-… or set XAI_API_KEY on server" autocomplete="off" />
         </label>
         <p id="keyStatus" class="hint"></p>
       </section>
 
+      <section class="panel curriculum-panel">
+        <p class="section-label">Curriculum · one-click</p>
+        <div class="chips" id="curriculumChips"></div>
+      </section>
+
       <section class="panel prompts">
-        <p class="section-label">Try a prompt</p>
+        <p class="section-label">Ask Grok to build</p>
         <div class="chips" id="chips"></div>
       </section>
 
       <section class="panel chat-panel">
         <div id="chatLog" class="chat-log"></div>
         <form id="chatForm" class="chat-form">
-          <textarea id="prompt" rows="3" placeholder="Describe a scene… e.g. heavy red bowling ball and light yellow balls bouncing on stairs so I can see gravity"></textarea>
+          <textarea id="prompt" rows="3" placeholder="Describe a scene… e.g. heavy red bowling ball and light yellow balls bouncing so I can see gravity"></textarea>
           <div class="row">
             <button type="submit" id="sendBtn" class="primary">Build scene</button>
             <button type="button" id="refineBtn" class="ghost" title="Edit the current scene">Refine</button>
@@ -52,14 +58,16 @@
           <button type="button" id="playBtn" class="primary">▶ Run</button>
           <button type="button" id="pauseBtn" class="ghost">Pause</button>
           <button type="button" id="resetBtn" class="ghost">Reset</button>
+          <button type="button" id="shareBtn" class="ghost share" title="Copy shareable link">Share</button>
         </div>
         <div class="row examples-row">
           <select id="exampleSelect">
-            <option value="">Load example…</option>
+            <option value="">All examples…</option>
           </select>
           <button type="button" id="loadExampleBtn" class="ghost">Load</button>
         </div>
-        <p id="simStatus" class="hint">Describe a scene or load an example, then Run.</p>
+        <p id="simStatus" class="hint">Loading demo…</p>
+        <p id="shareStatus" class="hint share-status"></p>
       </section>
     </aside>
 
@@ -69,12 +77,16 @@
         <span id="hudTitle">breve</span>
         <span id="hudTime">t=0.0s</span>
       </div>
+      <div id="welcome" class="welcome">
+        <strong>Drag</strong> orbit · <strong>scroll</strong> zoom · scene auto-starts
+      </div>
       <div id="overlay" class="overlay hidden">
         <div class="overlay-card">
-          <h2>Building scene…</h2>
-          <p>Grok is composing floors, masses, and camera framing.</p>
+          <h2 id="overlayTitle">Building scene…</h2>
+          <p id="overlayBody">Grok is composing floors, masses, and camera framing.</p>
         </div>
       </div>
+      <div id="toast" class="toast hidden"></div>
     </main>
   </div>
   <script type="module" src="/static/app.js"></script>

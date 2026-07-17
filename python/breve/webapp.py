@@ -29,9 +29,34 @@ from breve.scene import (
     snapshot_state,
     validate_scene,
 )
+from breve.share import decode_scene, encode_scene
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_static"
 SCENES_DIR = Path(__file__).resolve().parents[2] / "scenes"
+
+# Curriculum order for first-run autoplay + chips
+CURRICULUM = [
+    {
+        "id": "example_gravity",
+        "label": "Gravity + mass",
+        "blurb": "Heavy vs light balls — free-fall vs collisions",
+    },
+    {
+        "id": "example_stairs",
+        "label": "Stairs",
+        "blurb": "Mixed masses rolling down steps",
+    },
+    {
+        "id": "example_tower",
+        "label": "Wrecking ball",
+        "blurb": "Lobbed ball arcs into a box tower",
+    },
+    {
+        "id": "example_flock",
+        "label": "Flock",
+        "blurb": "Local rules → swarming in 3D",
+    },
+]
 
 app = FastAPI(title="breve", description="3D multi-agent / ALife with AI scene builder")
 
@@ -51,6 +76,7 @@ class ChatResponse(BaseModel):
     explanation: str
     scene: Dict[str, Any]
     title: str = ""
+    share_token: str = ""
 
 
 class RunRequest(BaseModel):
@@ -58,9 +84,14 @@ class RunRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class ShareRequest(BaseModel):
+    scene: Dict[str, Any]
+
+
 class StatusResponse(BaseModel):
     has_server_key: bool
     version: str
+    default_example: str = "example_gravity"
 
 
 @app.get("/api/status")
@@ -68,6 +99,28 @@ def status() -> StatusResponse:
     from breve import __version__
 
     return StatusResponse(has_server_key=bool(get_api_key()), version=__version__)
+
+
+@app.get("/api/curriculum")
+def curriculum() -> Dict[str, Any]:
+    """Ordered teaching demos for chips + first-run experience."""
+    items = []
+    for c in CURRICULUM:
+        path = SCENES_DIR / f"{c['id']}.json"
+        if not path.is_file():
+            continue
+        try:
+            spec = load_scene_file(str(path))
+        except Exception:
+            continue
+        items.append(
+            {
+                **c,
+                "title": spec.get("title") or c["label"],
+                "notes": spec.get("notes") or c["blurb"],
+            }
+        )
+    return {"curriculum": items, "default": "example_gravity"}
 
 
 @app.get("/api/examples")
@@ -136,11 +189,45 @@ def chat(req: ChatRequest) -> ChatResponse:
     except Exception:
         pass
 
+    scene = result["scene"]
+    try:
+        token = encode_scene(scene)
+    except Exception:
+        token = ""
+
     return ChatResponse(
         explanation=result["explanation"],
-        scene=result["scene"],
-        title=str(result["scene"].get("title") or ""),
+        scene=scene,
+        title=str(scene.get("title") or ""),
+        share_token=token,
     )
+
+
+@app.post("/api/share")
+def make_share(req: ShareRequest) -> Dict[str, Any]:
+    errs = validate_scene(req.scene)
+    if errs:
+        raise HTTPException(422, "Invalid scene: " + "; ".join(errs))
+    token = encode_scene(req.scene)
+    # warn if huge (some browsers cap URL length ~8k–32k)
+    return {
+        "token": token,
+        "path": f"/?s={token}",
+        "bytes": len(token),
+        "ok": len(token) < 12000,
+    }
+
+
+@app.get("/api/share/{token}")
+def load_share(token: str) -> Dict[str, Any]:
+    try:
+        scene = decode_scene(token)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    errs = validate_scene(scene)
+    if errs:
+        raise HTTPException(422, "Invalid shared scene: " + "; ".join(errs))
+    return scene
 
 
 @app.post("/api/session")
