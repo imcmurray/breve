@@ -43,6 +43,10 @@ class Gravity(breve.PhysicalControl):
         ground.move(breve.vector(3.0, -1.9, 0.0))
         ground.set_color(breve.vector(0.25, 0.3, 0.28))
         get_engine().register_physics_body(ground, static=True)
+        gb = get_engine().physics.get_body(ground)
+        if gb:
+            gb.restitution = 0.7
+            gb.friction = 0.25
 
         self.balls = breve.create_instances(Ball, 10)
         # Stagger initial drops
@@ -83,8 +87,8 @@ class Step(breve.Stationary):
         # high friction steps
         body = get_engine().physics.get_body(self)
         if body:
-            body.friction = 0.8
-            body.restitution = 0.35
+            body.friction = 0.35
+            body.restitution = 0.65
         return self
 
 
@@ -97,8 +101,8 @@ class Ball(breve.Mobile):
         self.enable_physics(mass=self.mass)
         body = get_engine().physics.get_body(self)
         if body:
-            body.restitution = 0.55
-            body.friction = 0.25
+            body.restitution = 0.75
+            body.friction = 0.18
         self.reset()
 
     def iterate(self):
@@ -138,7 +142,8 @@ class Ball(breve.Mobile):
             body.position[:] = [self.location.x, self.location.y, self.location.z]
             body.velocity[:] = [self.velocity.x, self.velocity.y, self.velocity.z]
             body.awake = True
-            body.restitution = 0.55
+            body.restitution = 0.75
+            body.friction = 0.18
 
 
 def get_engine():

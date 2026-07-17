@@ -116,22 +116,24 @@ class Block(breve.Mobile):
 
 class WreckingBall(breve.Mobile):
     def init(self):
-        self.set_shape(breve.Sphere().init_with(0.45))
+        self.set_shape(breve.Sphere().init_with(0.42))
         self.set_color(breve.vector(0.95, 0.15, 0.12))
-        self.mass = 18.0
+        self.mass = 10.0
         self._timer = 0.0
         self._launch()
 
     def _launch(self):
-        self.move(breve.vector(-4.5, 1.35, 0.0))
-        self.set_velocity(breve.vector(16.0, 0.8, 0.0))
+        # Lob: high start + upward velocity so gravity arcs are obvious
+        self.move(breve.vector(-5.0, 3.2, 0.0))
+        self.set_velocity(breve.vector(9.0, 2.5, 0.4))
         self.enable_physics(mass=self.mass)
         body = get_engine().physics.get_body(self)
         if body is not None:
-            body.restitution = 0.2
-            body.friction = 0.05
-            body.position[:] = [-4.5, 1.35, 0.0]
-            body.velocity[:] = [16.0, 0.8, 0.0]
+            # Bouncy enough to hop after impact, not a sticky wrecking ball
+            body.restitution = 0.65
+            body.friction = 0.15
+            body.position[:] = [-5.0, 3.2, 0.0]
+            body.velocity[:] = [9.0, 2.5, 0.4]
             body.awake = True
         self._timer = 0.0
 
@@ -139,10 +141,10 @@ class WreckingBall(breve.Mobile):
         eng = get_engine()
         self._timer += eng.iteration_step
         speed = breve.length(self.velocity)
-        # Re-launch on a steady cadence OR after stopping / flying away
-        if self._timer > 3.0 or self.location.x > 6 or (
-            self._timer > 1.2 and speed < 0.4
-        ):
+        # Let it bounce/roll for a while before the next lob
+        if self._timer > 6.0 or self.location.x > 8 or self.location.y < -1:
+            self._launch()
+        elif self._timer > 4.0 and speed < 0.25:
             self._launch()
 
 

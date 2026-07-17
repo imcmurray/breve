@@ -52,7 +52,8 @@ Hello().run(steps=3)
 | Gatherers | `python demos/gatherers.py` |
 | **Swarm (boids)** | `python demos/swarm.py --steps 200` |
 | Swarm + **3D** | `python demos/swarm.py --viz` |
-| **Gravity** (physics) | `python demos/gravity.py --viz` |
+| **Bouncy** (physics) | `python demos/bouncy.py --viz` |
+| **Gravity** (staircase) | `python demos/gravity.py --viz` |
 | **Stack** (wrecking ball) | `python demos/stack.py --viz` |
 
 Full list: [`demos/INDEX.md`](demos/INDEX.md)

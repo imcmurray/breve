@@ -90,11 +90,14 @@ class PhysicsWorld:
         self.gravity = np.array([0.0, -9.8, 0.0], dtype=np.float64)
         self.bodies: List[RigidBody] = []
         self._by_owner: dict = {}
-        self.iterations: int = 8
-        self.slop: float = 0.005
+        self.iterations: int = 10
+        self.slop: float = 0.004
         self.baumgarte: float = 0.2
-        self.linear_damping: float = 0.01
-        self.sleep_eps: float = 0.04
+        # Keep damping tiny — heavy damping made balls look like they hit molasses
+        self.linear_damping: float = 0.002
+        self.sleep_eps: float = 0.02
+        # Below this impact speed, treat as resting (no restitution) for stability
+        self.bounce_threshold: float = 0.35
         self.enabled: bool = True
 
     def set_gravity(self, x: float, y: float, z: float) -> None:
@@ -225,18 +228,17 @@ class PhysicsWorld:
         contacts = self._find_contacts()
         for _ in range(self.iterations):
             for c in contacts:
-                _resolve_contact(c, self.slop, self.baumgarte, dt)
+                _resolve_contact(
+                    c, self.slop, self.baumgarte, dt, self.bounce_threshold
+                )
 
-        # sleep small velocities
+        # gently settle truly tiny residual velocities (don't kill bounce)
         for body in self.bodies:
             if body.static:
                 continue
             speed = float(np.linalg.norm(body.velocity))
-            if speed < self.sleep_eps:
-                body.velocity *= 0.5
-            if speed < self.sleep_eps * 0.25 and abs(body.position[1]) < 1e6:
-                # don't fully sleep mid-air; only near support roughly
-                pass
+            if speed < self.sleep_eps * 0.5:
+                body.velocity *= 0.9
 
     def _find_contacts(self) -> List[Contact]:
         contacts: List[Contact] = []
@@ -367,26 +369,35 @@ def _box_box(a: RigidBody, b: RigidBody) -> Optional[Contact]:
     return Contact(a, b, n, pen, point)
 
 
-def _resolve_contact(c: Contact, slop: float, baumgarte: float, dt: float) -> None:
+def _resolve_contact(
+    c: Contact,
+    slop: float,
+    baumgarte: float,
+    dt: float,
+    bounce_threshold: float = 0.35,
+) -> None:
     a, b = c.a, c.b
     n = c.normal
-    # relative velocity
+    # relative velocity at contact (a relative to b)
     rv = a.velocity - b.velocity
     vel_n = float(np.dot(rv, n))
 
-    e = min(a.restitution, b.restitution)
+    # Combine restitution (geometric mean) so one bouncy object still bounces
+    e = float(np.sqrt(max(a.restitution, 0.0) * max(b.restitution, 0.0)))
     inv_mass_sum = a.inv_mass + b.inv_mass
     if inv_mass_sum <= 0:
         return
 
-    # only apply bounce when approaching
+    # Approaching: apply normal impulse. Soft impacts → no bounce (resting).
     if vel_n < 0:
-        j = -(1.0 + e) * vel_n / inv_mass_sum
+        impact_speed = -vel_n
+        e_eff = e if impact_speed > bounce_threshold else 0.0
+        j = -(1.0 + e_eff) * vel_n / inv_mass_sum
         impulse = n * j
         a.apply_impulse(impulse)
         b.apply_impulse(-impulse)
 
-        # friction (coulomb-ish)
+        # Friction — lighter on bouncy impacts so balls still roll/skip
         rv = a.velocity - b.velocity
         tangent = rv - n * float(np.dot(rv, n))
         tlen = float(np.linalg.norm(tangent))
@@ -394,11 +405,13 @@ def _resolve_contact(c: Contact, slop: float, baumgarte: float, dt: float) -> No
             t = tangent / tlen
             jt = -float(np.dot(rv, t)) / inv_mass_sum
             mu = (a.friction + b.friction) * 0.5
-            jt = float(np.clip(jt, -j * mu, j * mu))
+            if e_eff > 0.4:
+                mu *= 0.35  # less sticky when bouncing
+            jt = float(np.clip(jt, -abs(j) * mu, abs(j) * mu))
             a.apply_impulse(t * jt)
             b.apply_impulse(-t * jt)
 
-    # positional correction (Baumgarte)
+    # positional correction (Baumgarte) — separate from bounce impulse
     pen = max(c.penetration - slop, 0.0)
     if pen > 0:
         correction = n * (pen * baumgarte / inv_mass_sum)

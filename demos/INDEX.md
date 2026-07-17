@@ -9,8 +9,9 @@
 | Gatherers | `python demos/gatherers.py` | Collision-driven pickup |
 | **Swarm** | `python demos/swarm.py --steps 200` | Boids flocking (classic showpiece) |
 | Swarm **3D** | `python demos/swarm.py --viz` | Interactive 3D orbit view (`pip install -e '.[viz]'`) |
-| **Gravity** | `python demos/gravity.py --viz` | Balls bounce down a staircase (rigid body) |
-| **Stack** | `python demos/stack.py --viz` | Box stack + wrecking ball |
+| **Bouncy** | `python demos/bouncy.py --viz` | Gravity arcs + elastic bounces (best physics demo) |
+| **Gravity** | `python demos/gravity.py --viz` | Balls bounce down a staircase |
+| **Stack** | `python demos/stack.py --viz` | Lobbed wrecking ball + tower |
 
 ### Swarm 3D controls (`--viz`)
 
