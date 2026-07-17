@@ -34,10 +34,12 @@ Breve scene JSON (only this format is accepted):
       "type": "box" | "sphere",
       "static": true | false,          // true = floor/wall; false = dynamic body
       "pos": [x, y, z],
+      "pos_jitter": [0.15, 0.1, 0.15], // optional: ±uniform random added to pos each run
       "size": [sx, sy, sz],            // box full extents (required for box)
       "radius": 0.25,                  // sphere (required for sphere)
       "mass": 1.0,                     // dynamic only; heavier = more inertia in collisions
       "velocity": [vx, vy, vz],        // optional initial velocity
+      "velocity_jitter": [0.3, 0.2, 0.3], // optional: ±random added to velocity
       "color": [r, g, b],              // 0-1
       "restitution": 0.7,              // bounciness 0-1
       "friction": 0.2
@@ -130,11 +132,17 @@ class SceneController(PhysicalControl):
         otype = str(obj.get("type") or "sphere").lower()
         static = bool(obj.get("static", False))
         pos = _v3(obj.get("pos") or [0, 1, 0])
+        # Per-run randomness so demos don't look identical every Reset
+        if not static and obj.get("pos_jitter"):
+            pos = _apply_jitter(pos, obj.get("pos_jitter"))
         color = _v3(obj.get("color") or [0.7, 0.7, 0.8])
         mass = float(obj.get("mass") or 1.0)
         restitution = float(obj.get("restitution") if obj.get("restitution") is not None else 0.7)
         friction = float(obj.get("friction") if obj.get("friction") is not None else 0.2)
-        vel = obj.get("velocity")
+        vel_spec = obj.get("velocity")
+        vel = _v3(vel_spec) if vel_spec else None
+        if not static and vel is not None and obj.get("velocity_jitter"):
+            vel = _apply_jitter(vel, obj.get("velocity_jitter"))
 
         if static:
             body = Stationary()
@@ -151,8 +159,8 @@ class SceneController(PhysicalControl):
         body.move(pos)
         body.set_color(color)
 
-        if not static and vel:
-            body.set_velocity(_v3(vel))
+        if not static and vel is not None:
+            body.set_velocity(vel)
 
         eng = get_engine()
         if physics or static:
@@ -164,9 +172,9 @@ class SceneController(PhysicalControl):
             if pb is not None:
                 pb.restitution = restitution
                 pb.friction = friction
-                if not static and vel:
-                    v = _v3(vel)
-                    pb.velocity[:] = [v.x, v.y, v.z]
+                if not static and vel is not None:
+                    pb.velocity[:] = [vel.x, vel.y, vel.z]
+                pb.position[:] = [pos.x, pos.y, pos.z]
                 pb.awake = True
 
     def _spawn_agents(self, agent: Dict[str, Any]) -> None:
@@ -290,6 +298,18 @@ def random_unit() -> float:
     import numpy as np
 
     return float(np.random.random())
+
+
+def _apply_jitter(base, jitter_spec) -> "vector":
+    """base ± uniform[0, jitter] on each axis (symmetric around base)."""
+    import numpy as np
+
+    j = _v3(jitter_spec or [0, 0, 0])
+    return vector(
+        base.x + (np.random.random() * 2 - 1) * j.x,
+        base.y + (np.random.random() * 2 - 1) * j.y,
+        base.z + (np.random.random() * 2 - 1) * j.z,
+    )
 
 
 def validate_scene(spec: Dict[str, Any]) -> List[str]:
