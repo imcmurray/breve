@@ -38,15 +38,18 @@ Output rules:
 """
 
 
-def get_api_key() -> Optional[str]:
+def get_api_key(override: Optional[str] = None) -> Optional[str]:
+    if override and override.strip():
+        return override.strip()
     return os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
 
 
-def require_client():
-    key = get_api_key()
+def require_client(api_key: Optional[str] = None):
+    key = get_api_key(api_key)
     if not key:
         raise RuntimeError(
-            "No API key found. Set XAI_API_KEY (from https://console.x.ai):\n"
+            "No API key found. Set XAI_API_KEY (from https://console.x.ai) "
+            "or paste a key in the web UI:\n"
             "  export XAI_API_KEY=xai-...\n"
             "Optional: export XAI_MODEL=grok-4.5"
         )
@@ -65,13 +68,14 @@ def generate_scene(
     *,
     history: Optional[List[Dict[str, str]]] = None,
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Call Grok to produce a scene dict from a natural language request.
 
     Returns {"explanation": str, "scene": dict, "raw": str}
     """
-    client = require_client()
+    client = require_client(api_key)
     model = model or DEFAULT_MODEL
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
@@ -136,6 +140,7 @@ def refine_scene(
     instruction: str,
     *,
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ask the model to edit an existing scene JSON per user instruction."""
     prompt = (
@@ -144,4 +149,4 @@ def refine_scene(
         f"Instruction: {instruction}\n\n"
         f"Current scene:\n```json\n{json.dumps(scene, indent=2)}\n```"
     )
-    return generate_scene(prompt, model=model)
+    return generate_scene(prompt, model=model, api_key=api_key)

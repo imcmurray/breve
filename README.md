@@ -43,30 +43,32 @@ class Hello(breve.Control):
 Hello().run(steps=3)
 ```
 
-## AI scene builder (describe a world in English)
+## Web UI (recommended) — chat + live 3D in the browser
 
-Talk to **Grok** (xAI) and it builds a safe JSON scene — floors, balls, masses, flocks — then you open it in 3D.
+```bash
+pip install -e ".[webai]"
+export XAI_API_KEY=xai-...    # https://console.x.ai  (or paste key in the UI)
+breve-web
+# open http://127.0.0.1:8765
+```
+
+In the browser:
+
+1. Paste an **xAI API key** (optional if `XAI_API_KEY` is already set on the server)
+2. Type what you want: *“heavy and light balls so I can see gravity”*
+3. **Build scene** → Grok returns a scene → simulation streams into the **three.js** view
+4. Drag to orbit, scroll to zoom · Pause / Reset · Load examples without AI
+
+## CLI AI builder (optional)
 
 ```bash
 pip install -e ".[ai,viz]"
-export XAI_API_KEY=xai-...          # https://console.x.ai
-# optional: cp .env.example .env
-
-# one-shot
-breve-ai "heavy red ball and light yellow balls bouncing on stairs so I can see gravity" --viz
-
-# interactive
-breve-ai
-# breve-ai> flock of 40 blue birds
-# breve-ai> viz
-# breve-ai> make gravity stronger
-# breve-ai> save
-
-# no AI key needed — run a hand-written scene
+export XAI_API_KEY=xai-...
+breve-ai "heavy red ball and light yellow balls on stairs" --viz
 breve-ai --load scenes/example_gravity.json --viz
 ```
 
-How it works: the model only emits **declarative JSON** (not arbitrary code). Breve validates and builds the sim. See `python/breve/scene.py` for the schema.
+How it works: the model only emits **declarative JSON** (not arbitrary code). The engine validates and runs physics/flocking. Schema: `python/breve/scene.py`.
 
 ## Demos
 

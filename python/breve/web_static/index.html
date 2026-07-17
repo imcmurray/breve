@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>breve — AI 3D multi-agent sandbox</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <header class="brand">
+        <h1>breve</h1>
+        <p class="tag">AI scene builder · continuous 3D agents</p>
+      </header>
+
+      <section class="panel settings">
+        <label class="field">
+          <span>xAI API key</span>
+          <input id="apiKey" type="password" placeholder="xai-… (or set XAI_API_KEY)" autocomplete="off" />
+        </label>
+        <p id="keyStatus" class="hint"></p>
+      </section>
+
+      <section class="panel prompts">
+        <p class="section-label">Try a prompt</p>
+        <div class="chips" id="chips"></div>
+      </section>
+
+      <section class="panel chat-panel">
+        <div id="chatLog" class="chat-log"></div>
+        <form id="chatForm" class="chat-form">
+          <textarea id="prompt" rows="3" placeholder="Describe a scene… e.g. heavy red bowling ball and light yellow balls bouncing on stairs so I can see gravity"></textarea>
+          <div class="row">
+            <button type="submit" id="sendBtn" class="primary">Build scene</button>
+            <button type="button" id="refineBtn" class="ghost" title="Edit the current scene">Refine</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel controls">
+        <p class="section-label">Simulation</p>
+        <div class="row">
+          <button type="button" id="playBtn" class="primary">▶ Run</button>
+          <button type="button" id="pauseBtn" class="ghost">Pause</button>
+          <button type="button" id="resetBtn" class="ghost">Reset</button>
+        </div>
+        <div class="row examples-row">
+          <select id="exampleSelect">
+            <option value="">Load example…</option>
+          </select>
+          <button type="button" id="loadExampleBtn" class="ghost">Load</button>
+        </div>
+        <p id="simStatus" class="hint">Describe a scene or load an example, then Run.</p>
+      </section>
+    </aside>
+
+    <main id="viewport">
+      <canvas id="c"></canvas>
+      <div id="hud">
+        <span id="hudTitle">breve</span>
+        <span id="hudTime">t=0.0s</span>
+      </div>
+      <div id="overlay" class="overlay hidden">
+        <div class="overlay-card">
+          <h2>Building scene…</h2>
+          <p>Grok is composing floors, masses, and camera framing.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

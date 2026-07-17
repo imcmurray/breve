@@ -36,6 +36,20 @@ ai = [
   "openai>=1.40",
   "python-dotenv>=1.0",
 ]
+web = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "websockets>=12",
+  "python-dotenv>=1.0",
+]
+# full AI + browser UI
+webai = [
+  "openai>=1.40",
+  "python-dotenv>=1.0",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "websockets>=12",
+]
 dev = [
   "pytest>=7.0",
   "ruff>=0.4",
@@ -48,6 +62,7 @@ Documentation = "https://github.com/jonklein/breve/blob/master/REVIVAL.md"
 [project.scripts]
 breve-run = "breve.cli:main"
 breve-ai = "breve.ai_cli:main"
+breve-web = "breve.webapp:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/breve"]

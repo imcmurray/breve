@@ -351,6 +351,69 @@ def loads_scene(text: str) -> Dict[str, Any]:
         raise
 
 
+def build_scene(spec: Dict[str, Any]) -> SceneController:
+    """Validate and construct a scene controller (does not run)."""
+    errs = validate_scene(spec)
+    if errs:
+        raise ValueError("Invalid scene:\n  - " + "\n  - ".join(errs))
+    set_engine(Engine())
+    return SceneController(spec)
+
+
+def snapshot_state(sim: SceneController) -> Dict[str, Any]:
+    """Serialize current world for web / remote viewers."""
+    from breve.shapes import Box, Sphere
+
+    objects = []
+    for obj in sim.engine.objects:
+        if not obj.enabled:
+            continue
+        shape = obj.shape
+        entry: Dict[str, Any] = {
+            "id": id(obj),
+            "class": obj.__class__.__name__,
+            "pos": [obj.location.x, obj.location.y, obj.location.z],
+            "color": [obj.color.x, obj.color.y, obj.color.z],
+            "static": not isinstance(obj, Mobile)
+            or not getattr(obj, "physics_enabled", False),
+        }
+        if isinstance(shape, Sphere):
+            entry["type"] = "sphere"
+            entry["radius"] = float(shape.radius)
+        elif isinstance(shape, Box):
+            entry["type"] = "box"
+            entry["size"] = [shape.size.x, shape.size.y, shape.size.z]
+        else:
+            entry["type"] = "sphere"
+            entry["radius"] = 0.25
+        if isinstance(obj, Mobile):
+            entry["velocity"] = [
+                obj.velocity.x,
+                obj.velocity.y,
+                obj.velocity.z,
+            ]
+            entry["mass"] = float(getattr(obj, "mass", 1.0))
+            entry["physics"] = bool(getattr(obj, "physics_enabled", False))
+        objects.append(entry)
+
+    cam = {
+        "target": [
+            sim.camera_target.x,
+            sim.camera_target.y,
+            sim.camera_target.z,
+        ],
+        "zoom": float(sim.camera_zoom),
+    }
+    bg = sim.background_color
+    return {
+        "time": sim.engine.time,
+        "title": sim.title,
+        "background": [bg.x, bg.y, bg.z],
+        "camera": cam,
+        "objects": objects,
+    }
+
+
 def build_and_run(
     spec: Dict[str, Any],
     *,
@@ -358,12 +421,7 @@ def build_and_run(
     steps: Optional[int] = None,
 ) -> SceneController:
     """Validate, construct, and run a scene."""
-    errs = validate_scene(spec)
-    if errs:
-        raise ValueError("Invalid scene:\n  - " + "\n  - ".join(errs))
-
-    set_engine(Engine())
-    sim = SceneController(spec)
+    sim = build_scene(spec)
 
     if steps is None:
         steps = None if viz else 300
