@@ -43,6 +43,31 @@ class Hello(breve.Control):
 Hello().run(steps=3)
 ```
 
+## AI scene builder (describe a world in English)
+
+Talk to **Grok** (xAI) and it builds a safe JSON scene — floors, balls, masses, flocks — then you open it in 3D.
+
+```bash
+pip install -e ".[ai,viz]"
+export XAI_API_KEY=xai-...          # https://console.x.ai
+# optional: cp .env.example .env
+
+# one-shot
+breve-ai "heavy red ball and light yellow balls bouncing on stairs so I can see gravity" --viz
+
+# interactive
+breve-ai
+# breve-ai> flock of 40 blue birds
+# breve-ai> viz
+# breve-ai> make gravity stronger
+# breve-ai> save
+
+# no AI key needed — run a hand-written scene
+breve-ai --load scenes/example_gravity.json --viz
+```
+
+How it works: the model only emits **declarative JSON** (not arbitrary code). Breve validates and builds the sim. See `python/breve/scene.py` for the schema.
+
 ## Demos
 
 | Demo | Command |

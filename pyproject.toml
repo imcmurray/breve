@@ -32,6 +32,10 @@ viz = [
   "moderngl-window>=2.4",
   "pyglm>=2.7",
 ]
+ai = [
+  "openai>=1.40",
+  "python-dotenv>=1.0",
+]
 dev = [
   "pytest>=7.0",
   "ruff>=0.4",
@@ -43,6 +47,7 @@ Documentation = "https://github.com/jonklein/breve/blob/master/REVIVAL.md"
 
 [project.scripts]
 breve-run = "breve.cli:main"
+breve-ai = "breve.ai_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/breve"]

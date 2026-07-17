@@ -37,3 +37,6 @@ legacy/lib/libbreve.a
 *.log
 .coverage
 htmlcov/
+.env
+.env.*
+!.env.example

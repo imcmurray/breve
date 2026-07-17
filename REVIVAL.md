@@ -255,11 +255,12 @@ HelloWorld()
 
 1. ~~True 3D viewer (moderngl-window)~~ **done**
 2. ~~Rigid-body physics (pure Python solver)~~ **done** — Gravity + Stack demos
-3. Joints / MultiBody / Walker-lite (or Rapier backend when joints matter)
-4. Spatial hash for neighborhoods (scale past ~500 agents)
-5. Port Braitenberg + PatchLife (curriculum demos)
-6. Publish package to TestPyPI
-7. Better materials/lighting / optional Bevy sidecar later
+3. ~~AI scene builder (`breve-ai` + xAI Grok)~~ **done** — NL → JSON scene → 3D
+4. Joints / MultiBody / Walker-lite (or Rapier backend when joints matter)
+5. Spatial hash for neighborhoods (scale past ~500 agents)
+6. Port Braitenberg + PatchLife (curriculum demos)
+7. Publish package to TestPyPI
+8. Better materials/lighting / optional Bevy sidecar later
 
 ---
 

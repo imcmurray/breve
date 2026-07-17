@@ -23,6 +23,8 @@ from breve.shapes import Shape, Sphere, Cube, Box
 from breve.util import object_list, create_instances, random_expression
 from breve.physics import PhysicsWorld
 
+# scene / AI helpers imported lazily in CLI to keep core light
+
 __version__ = "0.1.0a1"
 __all__ = [
     "vector",
