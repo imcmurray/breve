@@ -372,11 +372,28 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
                 self.wnd.close()
                 return
 
-            if control.engine.running and not state["paused"]:
-                control.engine.step()
-                state["step_count"] += 1
+            # Always keep the engine marked running while the window is open
+            control.engine.running = True
+
+            # Fixed-step catch-up so slow frames don't freeze the sim
+            # and fast monitors don't over-speed it.
+            ft = float(frame_time) if frame_time and frame_time > 0 else 1.0 / 60.0
+            ft = min(ft, 0.1)  # spiral-of-death guard
+            state.setdefault("accum", 0.0)
+            if not state["paused"]:
+                state["accum"] += ft
+                # run enough sim steps to match real time (~1x)
+                max_catchup = 5
+                n = 0
+                while state["accum"] >= control.engine.iteration_step and n < max_catchup:
+                    control.engine.step()
+                    state["step_count"] += 1
+                    state["accum"] -= control.engine.iteration_step
+                    n += 1
+                    if steps is not None and state["step_count"] >= steps:
+                        break
                 if state["auto_orbit"]:
-                    state["azim"] += 0.35 * frame_time
+                    state["azim"] += 0.4 * ft
 
             self._rebuild()
 
@@ -409,9 +426,13 @@ def run_with_viewer(control: "Control", steps: Optional[int] = None) -> None:
             )
 
         def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
+            # Ignore tiny accidental drags when focusing the window
+            if abs(dx) < 1 and abs(dy) < 1:
+                return
             state["azim"] -= dx * 0.008
             state["elev"] += dy * 0.008
-            state["auto_orbit"] = False
+            if abs(dx) + abs(dy) > 3:
+                state["auto_orbit"] = False
 
         def on_mouse_scroll_event(self, x_offset: float, y_offset: float) -> None:
             state["dist"] = float(np.clip(state["dist"] * (0.9 ** y_offset), 3.0, 140.0))
