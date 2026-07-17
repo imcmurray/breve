@@ -1,0 +1,87 @@
+# breve
+
+**3D multi-agent / artificial-life simulation — modern revival.**
+
+Classic [breve](http://www.spiderland.org/) (Jon Klein, ~2000–2015) made continuous 3D agent worlds easy to script. This repository is an active resurrection: a **Python 3** engine that keeps the original *spirit* (subclass `Control` + `Mobile`, implement `iterate` / collisions) while the C++/Python 2 sources live under `legacy/` for reference.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q
+python demos/swarm.py --steps 150
+```
+
+Optional live top-down view:
+
+```bash
+pip install -e ".[viz]"
+python demos/swarm.py --viz
+```
+
+## Why breve?
+
+| Tool | Fit |
+|------|-----|
+| NetLogo / Mesa | Great for 2D grids & ABM — not continuous 3D physics toys |
+| Unity ML-Agents / MuJoCo | Powerful, heavy, not “script a flock in 50 lines” |
+| **breve** | Lightweight continuous 3D agents, educational, fun, emergent |
+
+## Quick example
+
+```python
+import breve
+from breve.engine import Engine, set_engine
+
+set_engine(Engine())
+
+class Hello(breve.Control):
+    def iterate(self):
+        print("Hello, world!")
+        super().iterate()
+
+Hello().run(steps=3)
+```
+
+## Demos
+
+| Demo | Command |
+|------|---------|
+| Hello World | `python demos/hello_world.py` |
+| Fountain | `python demos/fountain.py --steps 50` |
+| Gatherers | `python demos/gatherers.py` |
+| **Swarm (boids)** | `python demos/swarm.py --steps 200` |
+| Swarm + viz | `python demos/swarm.py --viz` |
+
+Full list: [`demos/INDEX.md`](demos/INDEX.md)
+
+## Layout
+
+```
+python/breve/     # installable engine (Python 3)
+demos/            # modern demos
+tests/
+legacy/           # original C++ / steve / Python 2 tree (museum)
+REVIVAL.md        # roadmap & architecture decisions
+```
+
+## Status
+
+| Feature | State |
+|---------|--------|
+| Control / Mobile / Stationary / Floor | done |
+| Kinematic integration, collisions | done |
+| Neighborhoods (flocking) | done |
+| Swarm, Fountain, Gatherers demos | done |
+| Optional pyglet 2D view | done |
+| Rigid-body physics (Rapier) | next |
+| Full 3D renderer / steve language | later (legacy only) |
+
+Roadmap and decisions: **[`REVIVAL.md`](REVIVAL.md)**
+
+## License
+
+GPL-2.0-or-later. Original breve © Jonathan Klein and contributors. See `LICENSE` / `GPL.txt`.
+
+## Citation
+
+If you use breve in research, please cite the original work, e.g. Klein, J. (2002/2003), *BREVE: a 3D environment for the simulation of decentralized systems and artificial life*, and note this revival build.

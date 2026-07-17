@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, revival]
+  pull_request:
+    branches: [master, main, revival]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Tests
+        run: pytest -q
+      - name: Headless demos
+        run: |
+          python demos/hello_world.py
+          python demos/fountain.py --steps 10
+          python demos/swarm.py --steps 20 --birds 20 --seed 1
