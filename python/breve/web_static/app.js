@@ -786,7 +786,9 @@ async function refreshStatus() {
     const r = await fetch("/api/status");
     const j = await r.json();
     const el = $("keyStatus");
-    const accel = j.numba_physics ? "Numba on" : "Numba off";
+    const avail = !!j.numba_available;
+    const on = !!j.numba_physics;
+    const accel = avail ? (on ? "Numba on" : "Numba off") : "Numba n/a";
     if (j.has_server_key) {
       el.textContent = `Server key ready · v${j.version} · ${accel} · AI chat on`;
       el.className = "hint ok";
@@ -797,10 +799,99 @@ async function refreshStatus() {
       el.textContent = `No API key — demos work · ${accel} · paste xAI key to chat-build`;
       el.className = "hint";
     }
+    syncNumbaToggle(j);
   } catch {
     $("keyStatus").textContent = "API unreachable";
     $("keyStatus").className = "hint bad";
   }
+}
+
+function syncNumbaToggle(status) {
+  const toggle = $("numbaToggle");
+  const hint = $("numbaHint");
+  const st = $("numbaStatus");
+  if (!toggle) return;
+  const avail = !!(status && status.numba_available);
+  const on = !!(status && status.numba_physics);
+  toggle.disabled = !avail;
+  toggle.checked = avail && on;
+  if (hint) {
+    hint.textContent = avail
+      ? "Faster CPU JIT solver (toggle anytime)"
+      : "Not installed — pip install 'breve[fast]'";
+  }
+  if (st) {
+    if (!avail) {
+      st.textContent = "Install numba on the server to enable this switch.";
+      st.className = "hint";
+    } else if (on) {
+      st.textContent = "Using Numba JIT for integrate + contact resolve.";
+      st.className = "hint ok";
+    } else {
+      st.textContent = "Using pure-Python physics solver.";
+      st.className = "hint";
+    }
+  }
+}
+
+async function setNumbaPreference(enabled) {
+  const st = $("numbaStatus");
+  try {
+    localStorage.setItem("breve_numba", enabled ? "1" : "0");
+    const r = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ numba: !!enabled }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) {
+      throw new Error(j.error || j.detail || "Could not update Numba setting");
+    }
+    syncNumbaToggle({
+      numba_available: j.numba_available,
+      numba_physics: j.numba_physics,
+    });
+    await refreshStatus();
+    toast(j.numba_physics ? "Numba physics enabled" : "Pure-Python physics");
+  } catch (e) {
+    if (st) {
+      st.textContent = String(e.message || e);
+      st.className = "hint bad";
+    }
+    toast(String(e.message || e), true);
+    // re-sync from server
+    refreshStatus();
+  }
+}
+
+function wireSettingsToggles() {
+  const toggle = $("numbaToggle");
+  if (toggle) {
+    toggle.addEventListener("change", () => {
+      setNumbaPreference(toggle.checked);
+    });
+  }
+  // Don't collapse Lab panel when clicking Defaults / scope badge
+  $("tweaksResetBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+  $("tweaksScope")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+}
+
+async function applyStoredNumbaPreference() {
+  const raw = localStorage.getItem("breve_numba");
+  if (raw !== "0" && raw !== "1") return;
+  try {
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ numba: raw === "1" }),
+    });
+  } catch (_) {}
 }
 
 // --- curriculum + examples --------------------------------------------------
@@ -1092,6 +1183,7 @@ $("resetBtn").addEventListener("click", () => {
 
 async function boot() {
   buildTweakUI();
+  wireSettingsToggles();
   state.tweaks = loadTweaks("example_gravity");
   syncTweakUI();
 
@@ -1099,6 +1191,7 @@ async function boot() {
     "Demo auto-starts. Lab controls (mass ranges, extra bodies, scatter) are saved per demo and restart the sim when you drag — speed is live. Open Build with Grok when you want AI scenes.",
     "system"
   );
+  await applyStoredNumbaPreference();
   await refreshStatus();
   await loadCurriculum();
   await loadExamplesSelect();

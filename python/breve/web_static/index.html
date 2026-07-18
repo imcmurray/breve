@@ -38,21 +38,24 @@
           <div class="chips chips-dense" id="curriculumChips"></div>
         </section>
 
-        <section class="panel tweaks-panel" id="tweaksPanel">
-          <div class="tweaks-head">
+        <details class="panel tweaks-panel collapsible-panel" id="tweaksPanel" open>
+          <summary class="collapsible-summary tweaks-summary">
             <div class="tweaks-title-block">
-              <p class="section-label">Lab controls</p>
-              <p class="tweaks-sub">Per-demo · restarts on change · speed is live</p>
+              <span class="section-label">Lab controls</span>
+              <span class="tweaks-sub">Per-demo · restarts on change · speed is live</span>
             </div>
             <div class="tweaks-head-actions">
               <span class="tweaks-scope" id="tweaksScope" title="Values are saved per demo">per demo</span>
               <button type="button" id="tweaksResetBtn" class="ghost tiny" title="Restore defaults for this demo">Defaults</button>
+              <span class="chev">▾</span>
+            </div>
+          </summary>
+          <div class="collapsible-body">
+            <div class="tweak-accordion" id="tweakGrid">
+              <!-- filled by app.js -->
             </div>
           </div>
-          <div class="tweak-accordion" id="tweakGrid">
-            <!-- filled by app.js -->
-          </div>
-        </section>
+        </details>
 
         <details class="panel chat-panel collapsible-panel" id="chatDetails">
           <summary class="collapsible-summary">
@@ -83,6 +86,19 @@
               <input id="apiKey" type="password" placeholder="xai-… or set XAI_API_KEY on server" autocomplete="off" />
             </label>
             <p id="keyStatus" class="hint"></p>
+            <div class="settings-row">
+              <div class="settings-toggle-block">
+                <label class="toggle-label" for="numbaToggle">
+                  <span class="toggle-title">Numba physics</span>
+                  <span class="toggle-hint" id="numbaHint">Faster CPU JIT solver when installed</span>
+                </label>
+                <label class="switch">
+                  <input type="checkbox" id="numbaToggle" />
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+              <p id="numbaStatus" class="hint"></p>
+            </div>
           </div>
         </details>
       </div>

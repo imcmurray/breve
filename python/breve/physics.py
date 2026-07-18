@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import numpy as np
 
-from breve.physics_kernels import HAS_NUMBA, warmup as _numba_warmup
+from breve.physics_kernels import numba_enabled, warmup as _numba_warmup
 
 if TYPE_CHECKING:
     from breve.objects import Real
@@ -477,7 +477,7 @@ class PhysicsWorld:
     def step(self, dt: float) -> None:
         if not self.enabled or dt <= 0:
             return
-        if HAS_NUMBA and self.bodies:
+        if numba_enabled() and self.bodies:
             self._step_numba(dt)
         else:
             self._step_python(dt)

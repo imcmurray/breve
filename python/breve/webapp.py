@@ -124,19 +124,45 @@ class StatusResponse(BaseModel):
     has_server_key: bool
     version: str
     default_example: str = "example_gravity"
-    numba_physics: bool = False
+    numba_available: bool = False
+    numba_physics: bool = False  # currently enabled for the solver
+
+
+class SettingsRequest(BaseModel):
+    numba: Optional[bool] = None
 
 
 @app.get("/api/status")
 def status() -> StatusResponse:
     from breve import __version__
-    from breve.physics_kernels import HAS_NUMBA
+    from breve.physics_kernels import numba_available, numba_enabled
 
     return StatusResponse(
         has_server_key=bool(get_api_key()),
         version=__version__,
-        numba_physics=bool(HAS_NUMBA),
+        numba_available=numba_available(),
+        numba_physics=numba_enabled(),
     )
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsRequest) -> Dict[str, Any]:
+    """Runtime server settings (Numba on/off when installed)."""
+    from breve.physics_kernels import numba_available, numba_enabled, set_numba_enabled
+
+    out: Dict[str, Any] = {
+        "ok": True,
+        "numba_available": numba_available(),
+        "numba_physics": numba_enabled(),
+    }
+    if req.numba is not None:
+        result = set_numba_enabled(bool(req.numba))
+        out.update(result)
+        out["numba_physics"] = result.get("enabled", False)
+        out["numba_available"] = result.get("available", numba_available())
+        if not result.get("ok"):
+            out["ok"] = False
+    return out
 
 
 @app.get("/api/curriculum")

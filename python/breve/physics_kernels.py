@@ -13,7 +13,7 @@ from typing import Tuple
 
 import numpy as np
 
-_force_off = os.environ.get("BREVE_NUMBA", "1").strip().lower() in (
+_env_default_off = os.environ.get("BREVE_NUMBA", "1").strip().lower() in (
     "0",
     "false",
     "no",
@@ -21,13 +21,11 @@ _force_off = os.environ.get("BREVE_NUMBA", "1").strip().lower() in (
 )
 
 try:
-    if _force_off:
-        raise ImportError("BREVE_NUMBA disabled")
     from numba import njit
 
-    HAS_NUMBA = True
+    NUMBA_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    HAS_NUMBA = False
+    NUMBA_AVAILABLE = False
 
     def njit(*args, **kwargs):  # type: ignore[misc]
         def deco(fn):
@@ -36,6 +34,42 @@ except ImportError:  # pragma: no cover
         if args and callable(args[0]) and len(args) == 1 and not kwargs:
             return args[0]
         return deco
+
+
+# Runtime toggle (web UI / API). Default on when installed unless BREVE_NUMBA=0.
+_USE_NUMBA = bool(NUMBA_AVAILABLE) and not _env_default_off
+
+# Back-compat: “can we use the JIT path?”
+HAS_NUMBA = NUMBA_AVAILABLE
+
+
+def numba_available() -> bool:
+    return bool(NUMBA_AVAILABLE)
+
+
+def numba_enabled() -> bool:
+    return bool(NUMBA_AVAILABLE and _USE_NUMBA)
+
+
+def set_numba_enabled(enabled: bool) -> dict:
+    """Enable/disable JIT at runtime. Returns status dict for the API."""
+    global _USE_NUMBA
+    want = bool(enabled)
+    if want and not NUMBA_AVAILABLE:
+        _USE_NUMBA = False
+        return {
+            "ok": False,
+            "available": False,
+            "enabled": False,
+            "error": "numba is not installed (pip install 'breve[fast]')",
+        }
+    _USE_NUMBA = want and NUMBA_AVAILABLE
+    return {
+        "ok": True,
+        "available": bool(NUMBA_AVAILABLE),
+        "enabled": bool(_USE_NUMBA),
+        "error": None,
+    }
 
 
 @njit(cache=True)
@@ -499,7 +533,7 @@ def inv_inertia_world_batch(
 
 def warmup() -> None:
     """Force-compile kernels once (first sim step still pays if skipped)."""
-    if not HAS_NUMBA:
+    if not NUMBA_AVAILABLE:
         return
     n, m = 2, 1
     pos = np.zeros((n, 3), dtype=np.float64)
