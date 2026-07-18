@@ -34,7 +34,7 @@ from breve.share import decode_scene, encode_scene
 STATIC_DIR = Path(__file__).resolve().parent / "web_static"
 SCENES_DIR = Path(__file__).resolve().parents[2] / "scenes"
 
-# Curriculum order for first-run autoplay + chips
+# Curriculum order for first-run autoplay + chips (10 demos)
 CURRICULUM = [
     {
         "id": "example_gravity",
@@ -44,17 +44,47 @@ CURRICULUM = [
     {
         "id": "example_stairs",
         "label": "Stairs",
-        "blurb": "Mixed masses rolling down steps",
+        "blurb": "Mixed masses rolling down steps (jittered starts)",
     },
     {
         "id": "example_tower",
         "label": "Wrecking ball",
-        "blurb": "Lobbed ball arcs into a box tower",
+        "blurb": "Aimed heavy ball smashes a box tower",
+    },
+    {
+        "id": "example_pyramid",
+        "label": "Pyramid",
+        "blurb": "Cannonball into a pyramid of boxes",
+    },
+    {
+        "id": "example_ramps",
+        "label": "Ramp race",
+        "blurb": "Light vs heavy down parallel ramps",
+    },
+    {
+        "id": "example_arena",
+        "label": "Bounce arena",
+        "blurb": "Enclosed room — walls keep the action going",
+    },
+    {
+        "id": "example_volley",
+        "label": "Mass volley",
+        "blurb": "Light swarm meets one heavy cannonball",
+    },
+    {
+        "id": "example_funnel",
+        "label": "Funnel",
+        "blurb": "Drop into a V of walls — masses settle differently",
     },
     {
         "id": "example_flock",
         "label": "Flock",
         "blurb": "Local rules → swarming in 3D",
+    },
+    {
+        "id": "example_wander",
+        "label": "Wander",
+        "blurb": "Decentralized agents roaming continuous space",
     },
 ]
 

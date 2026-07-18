@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="images/swarm3d.gif" alt="Live 3D multi-agent swarm in breve" width="720" />
+  <img src="images/readme-hero.png" alt="breve web UI — continuous 3D multi-agent gravity demo" width="780" />
 </p>
 
 <p align="center">
@@ -53,11 +53,28 @@ That loop is what makes this revival worth starring — not nostalgia for 2007 C
 | Web UI capability | Why it matters |
 |-------------------|----------------|
 | **Autoplay on load** | Zero-second “aha” — gravity & mass before you read a doc |
-| **Curriculum chips** | Teaching path without writing code |
+| **10 curriculum demos** | Teaching path without writing code |
 | **Chat → scene** | Natural language composition; model emits **JSON only** (no `exec`) |
 | **Live three.js view** | Drag to orbit, scroll zoom, pause/reset |
 | **Share links** | `/?example=…` or `/?s=…` so demos spread |
 | **Optional API key** | Examples work offline from AI; paste [xAI](https://console.x.ai) key when you want to invent worlds |
+
+### 10 one-click examples
+
+| # | Demo | What you’ll see |
+|---|------|-----------------|
+| 1 | **Gravity + mass** | Heavy vs light free-fall & collisions |
+| 2 | **Stairs** | Mixed masses down steps (random starts each run) |
+| 3 | **Wrecking ball** | Aimed heavy sphere smashes a tower |
+| 4 | **Pyramid** | Cannonball into stacked boxes |
+| 5 | **Ramp race** | Light vs heavy on parallel ramps |
+| 6 | **Bounce arena** | Enclosed room keeps bounces alive |
+| 7 | **Mass volley** | Light swarm meets one heavy ball |
+| 8 | **Funnel** | Drop into a V of walls |
+| 9 | **Flock** | Local rules → 3D swarming |
+| 10 | **Wander** | Decentralized agents roaming space |
+
+Links: `/?example=example_gravity` … `/?example=example_wander` (see `scenes/`).
 
 > **This is not “yet another boids gist.”**  
 > It’s a **browser-native continuous 3D multi-agent sandbox** with an AI door on the front.
@@ -91,7 +108,7 @@ Deploy for others: **[DEPLOY.md](DEPLOY.md)** (Docker / Fly / Railway).
 ## What people actually do in the UI
 
 1. **Land** — heavy vs light balls already falling  
-2. **Curriculum** — Stairs · Wrecking ball · Flock (one click)  
+2. **Curriculum** — 10 one-click demos (gravity through flock/wander)  
 3. **Share** — copy a link; classmate opens the same world  
 4. **Invent** — paste xAI key, describe a scene, refine in chat  
 5. **Learn** — free-fall looks the same; **collisions** reveal mass  

@@ -1,0 +1,70 @@
+{
+  "title": "gravity_funnel",
+  "mode": "physics",
+  "gravity": [0, -9.8, 0],
+  "background": [0.06, 0.08, 0.12],
+  "camera": { "target": [0, 1.5, 0], "zoom": 14 },
+  "notes": "Balls drop into a V of walls — different masses bounce and settle differently in the funnel.",
+  "objects": [
+    {
+      "type": "box", "static": true,
+      "pos": [0, -0.1, 0], "size": [12, 0.2, 8],
+      "color": [0.28, 0.32, 0.35], "restitution": 0.5, "friction": 0.4
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [-2.2, 1.4, 0], "size": [0.2, 3.2, 6],
+      "color": [0.45, 0.5, 0.55], "restitution": 0.7, "friction": 0.15
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [2.2, 1.4, 0], "size": [0.2, 3.2, 6],
+      "color": [0.45, 0.5, 0.55], "restitution": 0.7, "friction": 0.15
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [-1.3, 0.55, 0], "size": [2.0, 0.15, 5],
+      "color": [0.5, 0.48, 0.4], "restitution": 0.55, "friction": 0.25
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [1.3, 0.55, 0], "size": [2.0, 0.15, 5],
+      "color": [0.5, 0.48, 0.4], "restitution": 0.55, "friction": 0.25
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [-0.4, 4.5, -0.5], "pos_jitter": [0.5, 0.3, 0.5],
+      "radius": 0.15, "mass": 0.3,
+      "velocity": [0.5, 0, 0.3], "velocity_jitter": [0.8, 0.3, 0.8],
+      "color": [0.95, 0.9, 0.3], "restitution": 0.85, "friction": 0.1
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [0.3, 4.8, 0.4], "pos_jitter": [0.5, 0.3, 0.5],
+      "radius": 0.2, "mass": 1.5,
+      "velocity": [-0.3, 0, -0.2], "velocity_jitter": [0.6, 0.2, 0.6],
+      "color": [0.35, 0.85, 0.5], "restitution": 0.75, "friction": 0.15
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [0.0, 5.0, 0.0], "pos_jitter": [0.4, 0.25, 0.4],
+      "radius": 0.32, "mass": 8.0,
+      "velocity": [0.2, 0, 0.1], "velocity_jitter": [0.5, 0.2, 0.5],
+      "color": [0.9, 0.2, 0.2], "restitution": 0.6, "friction": 0.2
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [0.5, 4.6, 0.6], "pos_jitter": [0.45, 0.3, 0.45],
+      "radius": 0.14, "mass": 0.4,
+      "velocity": [-0.4, 0, -0.3], "velocity_jitter": [0.7, 0.3, 0.7],
+      "color": [0.5, 0.7, 1.0], "restitution": 0.88, "friction": 0.1
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [-0.5, 4.7, -0.3], "pos_jitter": [0.45, 0.3, 0.45],
+      "radius": 0.17, "mass": 0.7,
+      "velocity": [0.3, 0, 0.4], "velocity_jitter": [0.7, 0.3, 0.7],
+      "color": [0.9, 0.5, 0.9], "restitution": 0.82, "friction": 0.12
+    }
+  ]
+}
