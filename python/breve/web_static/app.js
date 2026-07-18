@@ -39,6 +39,8 @@ const TWEAK_DEFAULTS = {
   velocity: 1,
   randomness: 1,
   sizeJitter: 0,
+  autoPause: 1,
+  cullOob: 1,
 };
 
 const TWEAK_GROUPS = [
@@ -86,6 +88,35 @@ const TWEAK_GROUPS = [
       { key: "bounce", label: "Bounce", min: 0, max: 2, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
       { key: "friction", label: "Friction", min: 0, max: 2.5, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
       { key: "velocity", label: "Launch velocity", min: 0, max: 3, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+    ],
+  },
+  {
+    id: "auto",
+    title: "Housekeeping",
+    open: false,
+    summary: (t) =>
+      `${t.autoPause ? "auto-pause" : "run"} · ${t.cullOob ? "cull" : "keep"}`,
+    items: [
+      {
+        key: "autoPause",
+        label: "Auto-pause when still",
+        min: 0,
+        max: 1,
+        step: 1,
+        format: (v) => (v >= 0.5 ? "on" : "off"),
+        int: true,
+        housekeeping: true,
+      },
+      {
+        key: "cullOob",
+        label: "Remove off-screen",
+        min: 0,
+        max: 1,
+        step: 1,
+        format: (v) => (v >= 0.5 ? "on" : "off"),
+        int: true,
+        housekeeping: true,
+      },
     ],
   },
 ];
@@ -482,10 +513,20 @@ function onTweakInput(def, input) {
 
   if (def.live) {
     sendCmd("set_speed", { speed: state.tweaks.speed });
+  } else if (def.housekeeping) {
+    sendHousekeeping();
   } else {
     clearTimeout(state._tweakReloadTimer);
     state._tweakReloadTimer = setTimeout(() => applyTweaksLive(false), 180);
   }
+}
+
+function sendHousekeeping() {
+  const t = state.tweaks || TWEAK_DEFAULTS;
+  sendCmd("set_housekeeping", {
+    auto_pause: (t.autoPause ?? 1) >= 0.5,
+    cull_oob: (t.cullOob ?? 1) >= 0.5,
+  });
 }
 
 async function applyTweaksLive(forceRestart) {
@@ -499,6 +540,7 @@ async function applyTweaksLive(forceRestart) {
   }
   sendCmd("reload_scene", { scene });
   sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+  sendHousekeeping();
   const n = (scene.objects || []).filter((o) => !o.static).length;
   $("simStatus").textContent = `Tweaks applied · ${n} bodies · running`;
 }
@@ -795,6 +837,7 @@ async function loadExampleById(id, fromChip = false) {
     $("simStatus").textContent = `Demo “${scene.title || id}” — running`;
     await startSession(tuned);
     sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+    sendHousekeeping();
   } catch (e) {
     addBubble(String(e), "system");
     toast(String(e), true);
@@ -950,7 +993,21 @@ function connectWs(sessionId) {
   state.ws = ws;
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === "state") applyState(msg.state);
+    if (msg.type === "state") {
+      applyState(msg.state);
+      if (msg.just_settled || msg.auto_paused) {
+        state.paused = true;
+        const culled =
+          msg.culled_total != null ? msg.culled_total : msg.culled || 0;
+        const parts = ["Settled — auto-paused"];
+        if (culled > 0) parts.push(`${culled} removed off-screen`);
+        $("simStatus").textContent = parts.join(" · ");
+      } else if (msg.culled > 0 && !state.paused) {
+        // brief note when debris leaves the play volume mid-run
+        const n = (msg.state?.objects || []).filter((o) => !o.static).length;
+        $("simStatus").textContent = `Running · ${n} bodies · culled ${msg.culled_total || msg.culled}`;
+      }
+    }
     if (msg.type === "error") {
       addBubble(msg.error, "system");
       $("simStatus").textContent = "Error — see chat";
@@ -978,10 +1035,12 @@ $("playBtn").addEventListener("click", async () => {
     }
     await startSession(state.scene);
     sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+    sendHousekeeping();
   } else {
     state.paused = false;
     sendCmd("resume");
     sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+    sendHousekeeping();
     $("simStatus").textContent = "Running";
   }
 });

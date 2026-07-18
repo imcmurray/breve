@@ -389,6 +389,75 @@ def build_scene(spec: Dict[str, Any]) -> SceneController:
     return SceneController(spec)
 
 
+def _dynamic_physics_bodies(sim: SceneController):
+    """Yield (owner, RigidBody) for enabled dynamic physics mobiles."""
+    eng = sim.engine
+    for obj in eng.objects:
+        if not obj.enabled or not isinstance(obj, Mobile):
+            continue
+        if not getattr(obj, "physics_enabled", False):
+            continue
+        body = eng.physics.get_body(obj)
+        if body is None or body.static:
+            continue
+        yield obj, body
+
+
+def cull_out_of_view(
+    sim: SceneController,
+    *,
+    y_min: float = -12.0,
+    xz_limit: float = 48.0,
+) -> int:
+    """
+    Remove dynamic bodies that have fallen out of the play volume.
+
+    Used by the web sim so debris that leaves the camera never accumulates.
+    """
+    culled = 0
+    doomed = []
+    for obj, body in _dynamic_physics_bodies(sim):
+        x, y, z = float(body.position[0]), float(body.position[1]), float(body.position[2])
+        if y < y_min or abs(x) > xz_limit or abs(z) > xz_limit:
+            doomed.append(obj)
+    for obj in doomed:
+        obj.remove()
+        culled += 1
+    return culled
+
+
+def world_is_settled(
+    sim: SceneController,
+    *,
+    speed_eps: float = 0.10,
+    spin_eps: float = 0.22,
+    min_bodies: int = 1,
+) -> bool:
+    """
+    True when every dynamic physics body is nearly still.
+
+    Empty / non-physics scenes are treated as settled so the web UI can pause.
+    """
+    n = 0
+    for _obj, body in _dynamic_physics_bodies(sim):
+        n += 1
+        vx, vy, vz = (
+            float(body.velocity[0]),
+            float(body.velocity[1]),
+            float(body.velocity[2]),
+        )
+        speed = (vx * vx + vy * vy + vz * vz) ** 0.5
+        wx, wy, wz = (
+            float(body.angular_velocity[0]),
+            float(body.angular_velocity[1]),
+            float(body.angular_velocity[2]),
+        )
+        spin = (wx * wx + wy * wy + wz * wz) ** 0.5
+        if speed > speed_eps or spin > spin_eps:
+            return False
+    return n >= 0  # settled even if zero dynamics left
+
+
 def snapshot_state(sim: SceneController) -> Dict[str, Any]:
     """Serialize current world for web / remote viewers."""
     from breve.shapes import Box, Sphere
@@ -446,6 +515,7 @@ def snapshot_state(sim: SceneController) -> Dict[str, Any]:
         "background": [bg.x, bg.y, bg.z],
         "camera": cam,
         "objects": objects,
+        "settled": world_is_settled(sim),
     }
 
 

@@ -24,10 +24,12 @@ from pydantic import BaseModel, Field
 from breve.ai_llm import generate_scene, refine_scene, get_api_key
 from breve.scene import (
     build_scene,
+    cull_out_of_view,
     load_scene_file,
     save_scene,
     snapshot_state,
     validate_scene,
+    world_is_settled,
 )
 from breve.share import decode_scene, encode_scene
 
@@ -278,6 +280,11 @@ def create_session(req: RunRequest) -> Dict[str, Any]:
         "paused": False,
         "scene": req.scene,
         "speed": 1.0,
+        "auto_pause": True,
+        "cull_oob": True,
+        "settle_ticks": 0,
+        "auto_paused": False,
+        "culled_total": 0,
     }
     snap = snapshot_state(sim)
     return {"session_id": sid, "state": snap}
@@ -311,16 +318,28 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                 cmd = data.get("cmd")
                 if cmd == "pause":
                     sess["paused"] = True
+                    sess["auto_paused"] = False
                 elif cmd == "resume":
                     sess["paused"] = False
+                    sess["auto_paused"] = False
+                    sess["settle_ticks"] = 0
                 elif cmd == "reset":
                     # optional scene payload when client re-applies tweaks
                     if isinstance(data.get("scene"), dict):
                         sess["scene"] = data["scene"]
                     sim = build_scene(sess["scene"])
                     sess["sim"] = sim
+                    sess["paused"] = False
+                    sess["auto_paused"] = False
+                    sess["settle_ticks"] = 0
+                    sess["culled_total"] = 0
                     await websocket.send_json(
-                        {"type": "state", "state": snapshot_state(sim)}
+                        {
+                            "type": "state",
+                            "state": snapshot_state(sim),
+                            "auto_paused": False,
+                            "culled": 0,
+                        }
                     )
                 elif cmd == "set_speed":
                     try:
@@ -328,6 +347,16 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                     except (TypeError, ValueError):
                         sp = 1.0
                     sess["speed"] = max(0.1, min(4.0, sp))
+                elif cmd == "set_housekeeping":
+                    if "auto_pause" in data:
+                        sess["auto_pause"] = bool(data["auto_pause"])
+                    if "cull_oob" in data:
+                        sess["cull_oob"] = bool(data["cull_oob"])
+                    if not sess.get("auto_pause"):
+                        sess["settle_ticks"] = 0
+                        if sess.get("auto_paused"):
+                            sess["auto_paused"] = False
+                            sess["paused"] = False
                 elif cmd == "reload_scene":
                     # live mass/gravity tweaks: rebuild world, keep session id
                     if isinstance(data.get("scene"), dict):
@@ -335,8 +364,16 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                     sim = build_scene(sess["scene"])
                     sess["sim"] = sim
                     sess["paused"] = False
+                    sess["auto_paused"] = False
+                    sess["settle_ticks"] = 0
+                    sess["culled_total"] = 0
                     await websocket.send_json(
-                        {"type": "state", "state": snapshot_state(sim)}
+                        {
+                            "type": "state",
+                            "state": snapshot_state(sim),
+                            "auto_paused": False,
+                            "culled": 0,
+                        }
                     )
                 elif cmd == "step":
                     sim.engine.step()
@@ -363,8 +400,36 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                         continue
                 for _ in range(n_steps):
                     sim.engine.step()
+
+                culled = 0
+                if sess.get("cull_oob", True):
+                    culled = cull_out_of_view(sim)
+                    if culled:
+                        sess["culled_total"] = int(sess.get("culled_total", 0)) + culled
+
+                # Auto-pause once the pile has been still for a short while
+                auto_paused_now = False
+                if sess.get("auto_pause", True):
+                    if world_is_settled(sim):
+                        sess["settle_ticks"] = int(sess.get("settle_ticks", 0)) + 1
+                        # ~0.5s at 30 Hz
+                        if sess["settle_ticks"] >= 15:
+                            sess["paused"] = True
+                            sess["auto_paused"] = True
+                            auto_paused_now = True
+                    else:
+                        sess["settle_ticks"] = 0
+
+                snap = snapshot_state(sim)
                 await websocket.send_json(
-                    {"type": "state", "state": snapshot_state(sim)}
+                    {
+                        "type": "state",
+                        "state": snap,
+                        "auto_paused": bool(sess.get("auto_paused")),
+                        "culled": culled,
+                        "culled_total": int(sess.get("culled_total", 0)),
+                        "just_settled": auto_paused_now,
+                    }
                 )
             else:
                 await asyncio.sleep(tick)
