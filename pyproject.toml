@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "breve"
-version = "0.2.0"
+version = "0.2.1"
 description = "Modern revival of the breve 3D multi-agent / artificial-life simulation environment"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +42,10 @@ web = [
   "websockets>=12",
   "python-dotenv>=1.0",
 ]
+# optional JIT for the rigid-body hot path (CPU)
+fast = [
+  "numba>=0.59",
+]
 # full AI + browser UI
 webai = [
   "openai>=1.40",
@@ -49,6 +53,14 @@ webai = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
   "websockets>=12",
+]
+# web UI + Numba physics
+webfast = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "websockets>=12",
+  "python-dotenv>=1.0",
+  "numba>=0.59",
 ]
 dev = [
   "pytest>=7.0",

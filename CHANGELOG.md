@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] — 2026-07-18
+
+### Performance
+- Optional **Numba** CPU JIT for integrate + contact resolve (`pip install 'breve[fast]'` or `breve[webfast]`)
+- Disable with `BREVE_NUMBA=0`; `/api/status` reports `numba_physics`
+
 ## [0.2.0] — 2026-07-18
 
 ### Web product

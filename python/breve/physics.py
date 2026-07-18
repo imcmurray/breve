@@ -17,9 +17,13 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 import numpy as np
 
+from breve.physics_kernels import HAS_NUMBA, warmup as _numba_warmup
+
 if TYPE_CHECKING:
     from breve.objects import Real
     from breve.shapes import Shape
+
+_NUMBA_WARMED = False
 
 
 class ShapeKind(Enum):
@@ -473,7 +477,229 @@ class PhysicsWorld:
     def step(self, dt: float) -> None:
         if not self.enabled or dt <= 0:
             return
+        if HAS_NUMBA and self.bodies:
+            self._step_numba(dt)
+        else:
+            self._step_python(dt)
 
+    def _step_numba(self, dt: float) -> None:
+        """Pack bodies → Numba integrate/resolve → unpack (optional fast path)."""
+        global _NUMBA_WARMED
+        if not _NUMBA_WARMED:
+            _numba_warmup()
+            _NUMBA_WARMED = True
+
+        from breve.physics_kernels import (
+            integrate_bodies,
+            inv_inertia_world_batch,
+            quat_to_R,
+            resolve_contacts_batch,
+        )
+
+        bodies = self.bodies
+        n = len(bodies)
+        pos = np.empty((n, 3), dtype=np.float64)
+        vel = np.empty((n, 3), dtype=np.float64)
+        omega = np.empty((n, 3), dtype=np.float64)
+        quat = np.empty((n, 4), dtype=np.float64)
+        inv_mass = np.empty(n, dtype=np.float64)
+        inv_I_local = np.empty((n, 3), dtype=np.float64)
+        mass = np.empty(n, dtype=np.float64)
+        force = np.empty((n, 3), dtype=np.float64)
+        torque = np.empty((n, 3), dtype=np.float64)
+        is_static = np.empty(n, dtype=np.bool_)
+        awake = np.empty(n, dtype=np.bool_)
+        restitution = np.empty(n, dtype=np.float64)
+        friction = np.empty(n, dtype=np.float64)
+
+        for i, b in enumerate(bodies):
+            pos[i] = b.position
+            vel[i] = b.velocity
+            omega[i] = b.angular_velocity
+            quat[i] = b.orientation
+            inv_mass[i] = 0.0 if b.static else b.inv_mass
+            inv_I_local[i] = b.inv_inertia_local
+            mass[i] = b.mass
+            force[i] = b.force
+            torque[i] = b.torque
+            is_static[i] = b.static
+            awake[i] = b.awake
+            restitution[i] = b.restitution
+            friction[i] = b.friction
+
+        R = np.empty((n, 3, 3), dtype=np.float64)
+        inv_I = np.empty((n, 3, 3), dtype=np.float64)
+        quat_to_R(quat, R)
+        inv_inertia_world_batch(R, inv_I_local, is_static, inv_I)
+
+        gx, gy, gz = float(self.gravity[0]), float(self.gravity[1]), float(self.gravity[2])
+        integrate_bodies(
+            pos,
+            vel,
+            omega,
+            quat,
+            inv_mass,
+            inv_I,
+            mass,
+            force,
+            torque,
+            is_static,
+            awake,
+            gx,
+            gy,
+            gz,
+            float(dt),
+            float(self.linear_damping),
+            float(self.angular_damping),
+        )
+        # rotation changed → refresh world inertia for contact resolve
+        quat_to_R(quat, R)
+        inv_inertia_world_batch(R, inv_I_local, is_static, inv_I)
+
+        # Write pose back so Python collision sees updated positions
+        for i, b in enumerate(bodies):
+            b.position[:] = pos[i]
+            b.velocity[:] = vel[i]
+            b.angular_velocity[:] = omega[i]
+            b.orientation[:] = quat[i]
+            b.force[:] = 0.0
+            b.torque[:] = 0.0
+            b.invalidate_cache()
+            b._R = R[i].copy()
+            b._inv_I_w = inv_I[i].copy()
+
+        body_index = {id(b): i for i, b in enumerate(bodies)}
+        contacts = self._find_contacts()
+        if contacts:
+            m = len(contacts)
+            ca = np.empty(m, dtype=np.int64)
+            cb = np.empty(m, dtype=np.int64)
+            cn = np.empty((m, 3), dtype=np.float64)
+            cp = np.empty((m, 3), dtype=np.float64)
+            cpen = np.empty(m, dtype=np.float64)
+            cmscale = np.empty(m, dtype=np.float64)
+            for i, c in enumerate(contacts):
+                ca[i] = body_index[id(c.a)]
+                cb[i] = body_index[id(c.b)]
+                cn[i] = c.normal
+                cp[i] = c.point
+                cpen[i] = c.penetration
+                cmscale[i] = c.manifold_scale
+
+            resolve_contacts_batch(
+                pos,
+                vel,
+                omega,
+                inv_mass,
+                inv_I,
+                restitution,
+                friction,
+                is_static,
+                ca,
+                cb,
+                cn,
+                cp,
+                cpen,
+                cmscale,
+                float(self.slop),
+                float(self.baumgarte),
+                float(self.bounce_threshold),
+                float(dt),
+                float(self.max_bias),
+                float(self.deep_bias),
+                0,
+                int(self.iterations),
+            )
+
+            # Position-only passes with refreshed contacts
+            for _ in range(self.position_iterations):
+                for i, b in enumerate(bodies):
+                    b.position[:] = pos[i]
+                    b.velocity[:] = vel[i]
+                    b.angular_velocity[:] = omega[i]
+                    b.invalidate_cache()
+                    b._R = R[i].copy()
+                    b._inv_I_w = inv_I[i].copy()
+                contacts = self._find_contacts()
+                if not contacts:
+                    break
+                m = len(contacts)
+                ca = np.empty(m, dtype=np.int64)
+                cb = np.empty(m, dtype=np.int64)
+                cn = np.empty((m, 3), dtype=np.float64)
+                cp = np.empty((m, 3), dtype=np.float64)
+                cpen = np.empty(m, dtype=np.float64)
+                cmscale = np.empty(m, dtype=np.float64)
+                for i, c in enumerate(contacts):
+                    ca[i] = body_index[id(c.a)]
+                    cb[i] = body_index[id(c.b)]
+                    cn[i] = c.normal
+                    cp[i] = c.point
+                    cpen[i] = c.penetration
+                    cmscale[i] = c.manifold_scale
+                resolve_contacts_batch(
+                    pos,
+                    vel,
+                    omega,
+                    inv_mass,
+                    inv_I,
+                    restitution,
+                    friction,
+                    is_static,
+                    ca,
+                    cb,
+                    cn,
+                    cp,
+                    cpen,
+                    cmscale,
+                    float(self.slop),
+                    float(self.baumgarte),
+                    float(self.bounce_threshold),
+                    float(dt),
+                    float(self.max_bias),
+                    float(self.deep_bias),
+                    1,
+                    1,
+                )
+
+        # Rest damping (Python — small N)
+        in_contact: set = set()
+        for c in contacts:
+            in_contact.add(id(c.a))
+            in_contact.add(id(c.b))
+        for i, body in enumerate(bodies):
+            body.position[:] = pos[i]
+            body.velocity[:] = vel[i]
+            body.angular_velocity[:] = omega[i]
+            body.orientation[:] = quat[i]
+            body.invalidate_cache()
+            if body.static:
+                continue
+            if id(body) not in in_contact:
+                body._sleep_frames = 0
+                continue
+            vx, vy, vz = float(vel[i, 0]), float(vel[i, 1]), float(vel[i, 2])
+            wx, wy, wz = float(omega[i, 0]), float(omega[i, 1]), float(omega[i, 2])
+            speed = (vx * vx + vy * vy + vz * vz) ** 0.5
+            spin = (wx * wx + wy * wy + wz * wz) ** 0.5
+            if speed < 0.35 and spin < 0.8:
+                body.velocity[0] *= 0.85
+                body.velocity[1] *= 0.85
+                body.velocity[2] *= 0.85
+                body.angular_velocity[0] *= 0.78
+                body.angular_velocity[1] *= 0.78
+                body.angular_velocity[2] *= 0.78
+                speed *= 0.85
+                spin *= 0.78
+            if speed < 0.12 and spin < 0.25:
+                body._sleep_frames += 1
+                if body._sleep_frames >= self.sleep_frames_needed:
+                    body.velocity[:] = 0.0
+                    body.angular_velocity[:] = 0.0
+            else:
+                body._sleep_frames = 0
+
+    def _step_python(self, dt: float) -> None:
         gx, gy, gz = float(self.gravity[0]), float(self.gravity[1]), float(self.gravity[2])
         ld = max(0.0, 1.0 - self.linear_damping)
         ad = max(0.0, 1.0 - self.angular_damping)
@@ -572,7 +798,7 @@ class PhysicsWorld:
                 )
 
         # Contact damping + rest zero. Free-fall (not in contact) is never damped.
-        in_contact: set = set()
+        in_contact = set()
         for c in contacts:
             in_contact.add(id(c.a))
             in_contact.add(id(c.b))

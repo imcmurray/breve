@@ -786,14 +786,15 @@ async function refreshStatus() {
     const r = await fetch("/api/status");
     const j = await r.json();
     const el = $("keyStatus");
+    const accel = j.numba_physics ? "Numba on" : "Numba off";
     if (j.has_server_key) {
-      el.textContent = `Server key ready · v${j.version} · AI chat on`;
+      el.textContent = `Server key ready · v${j.version} · ${accel} · AI chat on`;
       el.className = "hint ok";
     } else if (getKey()) {
-      el.textContent = `Browser key ready · v${j.version}`;
+      el.textContent = `Browser key ready · v${j.version} · ${accel}`;
       el.className = "hint ok";
     } else {
-      el.textContent = "No API key — examples still work; paste xAI key to chat-build";
+      el.textContent = `No API key — demos work · ${accel} · paste xAI key to chat-build`;
       el.className = "hint";
     }
   } catch {

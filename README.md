@@ -89,6 +89,8 @@ git clone https://github.com/imcmurray/breve.git
 cd breve
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[webai]"
+# optional: JIT physics (Numba) for a faster CPU solver
+pip install -e ".[webfast]"
 breve-web
 ```
 
@@ -98,6 +100,7 @@ No API key required for demos. Optional:
 
 ```bash
 export XAI_API_KEY=xai-...   # https://console.x.ai
+# BREVE_NUMBA=0   # force pure-Python physics even if Numba is installed
 ```
 
 Then in the UI: *“heavy red ball and light yellow balls so I can see gravity”* → **Build scene**.

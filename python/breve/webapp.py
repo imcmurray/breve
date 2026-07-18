@@ -124,13 +124,19 @@ class StatusResponse(BaseModel):
     has_server_key: bool
     version: str
     default_example: str = "example_gravity"
+    numba_physics: bool = False
 
 
 @app.get("/api/status")
 def status() -> StatusResponse:
     from breve import __version__
+    from breve.physics_kernels import HAS_NUMBA
 
-    return StatusResponse(has_server_key=bool(get_api_key()), version=__version__)
+    return StatusResponse(
+        has_server_key=bool(get_api_key()),
+        version=__version__,
+        numba_physics=bool(HAS_NUMBA),
+    )
 
 
 @app.get("/api/curriculum")

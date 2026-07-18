@@ -25,7 +25,7 @@ from breve.physics import PhysicsWorld
 
 # scene / AI helpers imported lazily in CLI to keep core light
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = [
     "vector",
     "Vector",
