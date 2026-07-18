@@ -96,6 +96,20 @@ def _cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     )
 
 
+def _cross3(
+    ax: float, ay: float, az: float, bx: float, by: float, bz: float
+) -> Tuple[float, float, float]:
+    return ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
+
+
+def _dot3(ax: float, ay: float, az: float, bx: float, by: float, bz: float) -> float:
+    return ax * bx + ay * by + az * bz
+
+
+def _len3(x: float, y: float, z: float) -> float:
+    return (x * x + y * y + z * z) ** 0.5
+
+
 # ---------------------------------------------------------------------------
 # Collider / body
 # ---------------------------------------------------------------------------
@@ -194,16 +208,74 @@ class RigidBody:
     def apply_impulse_at(self, impulse: np.ndarray, point: np.ndarray) -> None:
         if self.static or self.inv_mass <= 0:
             return
-        self.velocity = self.velocity + impulse * self.inv_mass
-        r = point - self.position
-        self.angular_velocity = self.angular_velocity + self.inv_inertia_world() @ _cross(
-            r, impulse
+        self.apply_impulse_xyz(
+            float(impulse[0]),
+            float(impulse[1]),
+            float(impulse[2]),
+            float(point[0]),
+            float(point[1]),
+            float(point[2]),
         )
+
+    def apply_impulse_xyz(
+        self,
+        ix: float,
+        iy: float,
+        iz: float,
+        px: float,
+        py: float,
+        pz: float,
+    ) -> None:
+        """In-place impulse at world point — no temporary arrays."""
+        if self.static or self.inv_mass <= 0:
+            return
+        im = self.inv_mass
+        self.velocity[0] += ix * im
+        self.velocity[1] += iy * im
+        self.velocity[2] += iz * im
+        rx = px - float(self.position[0])
+        ry = py - float(self.position[1])
+        rz = pz - float(self.position[2])
+        tx, ty, tz = _cross3(rx, ry, rz, ix, iy, iz)
+        Iw = self.inv_inertia_world()
+        self.angular_velocity[0] += Iw[0, 0] * tx + Iw[0, 1] * ty + Iw[0, 2] * tz
+        self.angular_velocity[1] += Iw[1, 0] * tx + Iw[1, 1] * ty + Iw[1, 2] * tz
+        self.angular_velocity[2] += Iw[2, 0] * tx + Iw[2, 1] * ty + Iw[2, 2] * tz
         self.awake = True
         self._sleep_frames = 0
 
     def velocity_at_point(self, point: np.ndarray) -> np.ndarray:
-        return self.velocity + _cross(self.angular_velocity, point - self.position)
+        vx, vy, vz = self.velocity_at_xyz(
+            float(point[0]), float(point[1]), float(point[2])
+        )
+        return np.array([vx, vy, vz], dtype=np.float64)
+
+    def velocity_at_xyz(self, px: float, py: float, pz: float) -> Tuple[float, float, float]:
+        rx = px - float(self.position[0])
+        ry = py - float(self.position[1])
+        rz = pz - float(self.position[2])
+        wx = float(self.angular_velocity[0])
+        wy = float(self.angular_velocity[1])
+        wz = float(self.angular_velocity[2])
+        cx, cy, cz = _cross3(wx, wy, wz, rx, ry, rz)
+        return (
+            float(self.velocity[0]) + cx,
+            float(self.velocity[1]) + cy,
+            float(self.velocity[2]) + cz,
+        )
+
+    def angular_denom_xyz(
+        self, rx: float, ry: float, rz: float, ax: float, ay: float, az: float
+    ) -> float:
+        """(r × axis) · I^{-1} (r × axis)."""
+        if self.static:
+            return 0.0
+        cx, cy, cz = _cross3(rx, ry, rz, ax, ay, az)
+        Iw = self.inv_inertia_world()
+        ix = Iw[0, 0] * cx + Iw[0, 1] * cy + Iw[0, 2] * cz
+        iy = Iw[1, 0] * cx + Iw[1, 1] * cy + Iw[1, 2] * cz
+        iz = Iw[2, 0] * cx + Iw[2, 1] * cy + Iw[2, 2] * cz
+        return cx * ix + cy * iy + cz * iz
 
     def world_corners(self) -> np.ndarray:
         """8 corner positions of an oriented box (8×3). Cached per step."""
@@ -254,7 +326,7 @@ class PhysicsWorld:
         self.gravity = np.array([0.0, -9.8, 0.0], dtype=np.float64)
         self.bodies: List[RigidBody] = []
         self._by_owner: dict = {}
-        self.iterations: int = 8
+        self.iterations: int = 5
         # Allow a little overlap without velocity bias (kills rest hop).
         self.slop: float = 0.008
         self.baumgarte: float = 0.12
@@ -267,6 +339,9 @@ class PhysicsWorld:
         self.enabled: bool = True
         # frames of near-zero energy while in contact before full rest zero
         self.sleep_frames_needed: int = 4
+        # multi-point caps (static pairs need more feet for rest; dynamic can be thinner)
+        self.max_manifold_static: int = 4
+        self.max_manifold_dynamic: int = 2
 
     def set_gravity(self, x: float, y: float, z: float) -> None:
         self.gravity = np.array([float(x), float(y), float(z)], dtype=np.float64)
@@ -395,39 +470,72 @@ class PhysicsWorld:
         if not self.enabled or dt <= 0:
             return
 
+        gx, gy, gz = float(self.gravity[0]), float(self.gravity[1]), float(self.gravity[2])
+        ld = max(0.0, 1.0 - self.linear_damping)
+        ad = max(0.0, 1.0 - self.angular_damping)
+
         for body in self.bodies:
             body.invalidate_cache()
             if body.static or not body.awake:
                 body.force[:] = 0.0
                 body.torque[:] = 0.0
                 continue
-            body.force = body.force + self.gravity * body.mass
-            body.velocity = body.velocity + body.force * body.inv_mass * dt
-            body.angular_velocity = (
-                body.angular_velocity + body.inv_inertia_world() @ body.torque * dt
+            # integrate forces in-place
+            im = body.inv_mass
+            body.velocity[0] += (body.force[0] + gx * body.mass) * im * dt
+            body.velocity[1] += (body.force[1] + gy * body.mass) * im * dt
+            body.velocity[2] += (body.force[2] + gz * body.mass) * im * dt
+            if body.torque[0] or body.torque[1] or body.torque[2]:
+                Iw = body.inv_inertia_world()
+                tx, ty, tz = float(body.torque[0]), float(body.torque[1]), float(body.torque[2])
+                body.angular_velocity[0] += (Iw[0, 0] * tx + Iw[0, 1] * ty + Iw[0, 2] * tz) * dt
+                body.angular_velocity[1] += (Iw[1, 0] * tx + Iw[1, 1] * ty + Iw[1, 2] * tz) * dt
+                body.angular_velocity[2] += (Iw[2, 0] * tx + Iw[2, 1] * ty + Iw[2, 2] * tz) * dt
+            body.velocity[0] *= ld
+            body.velocity[1] *= ld
+            body.velocity[2] *= ld
+            body.angular_velocity[0] *= ad
+            body.angular_velocity[1] *= ad
+            body.angular_velocity[2] *= ad
+            speed2 = (
+                float(body.velocity[0]) ** 2
+                + float(body.velocity[1]) ** 2
+                + float(body.velocity[2]) ** 2
             )
-            body.velocity *= max(0.0, 1.0 - self.linear_damping)
-            body.angular_velocity *= max(0.0, 1.0 - self.angular_damping)
-            # clamp runaway spin/speed from deep-contact iterations
-            speed = float(np.linalg.norm(body.velocity))
-            if speed > 60.0:
-                body.velocity *= 60.0 / speed
-            w = float(np.linalg.norm(body.angular_velocity))
-            if w > 25.0:
-                body.angular_velocity *= 25.0 / w
+            if speed2 > 3600.0:
+                s = 60.0 / (speed2 ** 0.5)
+                body.velocity[0] *= s
+                body.velocity[1] *= s
+                body.velocity[2] *= s
+            w2 = (
+                float(body.angular_velocity[0]) ** 2
+                + float(body.angular_velocity[1]) ** 2
+                + float(body.angular_velocity[2]) ** 2
+            )
+            if w2 > 625.0:
+                s = 25.0 / (w2 ** 0.5)
+                body.angular_velocity[0] *= s
+                body.angular_velocity[1] *= s
+                body.angular_velocity[2] *= s
             body.force[:] = 0.0
             body.torque[:] = 0.0
 
         for body in self.bodies:
             if body.static or not body.awake:
                 continue
-            body.position = body.position + body.velocity * dt
+            body.position[0] += body.velocity[0] * dt
+            body.position[1] += body.velocity[1] * dt
+            body.position[2] += body.velocity[2] * dt
             body.orientation = _q_integrate(
                 body.orientation, body.angular_velocity, dt
             )
             body.invalidate_cache()
 
         contacts = self._find_contacts()
+        # warm inv-inertia caches before the iteration loop
+        for body in self.bodies:
+            if not body.static and body.awake:
+                body.inv_inertia_world()
         for _ in range(self.iterations):
             for c in contacts:
                 _resolve_contact(
@@ -450,14 +558,24 @@ class PhysicsWorld:
             if id(body) not in in_contact:
                 body._sleep_frames = 0
                 continue
-            speed = float(np.linalg.norm(body.velocity))
-            spin = float(np.linalg.norm(body.angular_velocity))
+            vx, vy, vz = float(body.velocity[0]), float(body.velocity[1]), float(body.velocity[2])
+            wx, wy, wz = (
+                float(body.angular_velocity[0]),
+                float(body.angular_velocity[1]),
+                float(body.angular_velocity[2]),
+            )
+            speed = (vx * vx + vy * vy + vz * vz) ** 0.5
+            spin = (wx * wx + wy * wy + wz * wz) ** 0.5
             # Soft dissipation when nearly settled — leave energetic tip/fall free.
             if speed < 0.35 and spin < 0.8:
-                body.velocity *= 0.85
-                body.angular_velocity *= 0.78
-                speed = float(np.linalg.norm(body.velocity))
-                spin = float(np.linalg.norm(body.angular_velocity))
+                body.velocity[0] *= 0.85
+                body.velocity[1] *= 0.85
+                body.velocity[2] *= 0.85
+                body.angular_velocity[0] *= 0.78
+                body.angular_velocity[1] *= 0.78
+                body.angular_velocity[2] *= 0.78
+                speed *= 0.85
+                spin *= 0.78
             if speed < 0.12 and spin < 0.25:
                 body._sleep_frames += 1
                 if body._sleep_frames >= self.sleep_frames_needed:
@@ -645,19 +763,23 @@ def _sat_obb_overlap(
     t_a = Ra.T @ t
 
     min_pen = 1e30
-    best_n = None
+    best_nx = best_ny = best_nz = 0.0
+    tx, ty, tz = float(t[0]), float(t[1]), float(t[2])
 
-    def consider(pen: float, axis_world: np.ndarray) -> None:
-        nonlocal min_pen, best_n
-        nlen = float(np.linalg.norm(axis_world))
+    def consider(pen: float, ax: float, ay: float, az: float) -> bool:
+        """Return False if separated (pen<=0 already handled). Updates best axis."""
+        nonlocal min_pen, best_nx, best_ny, best_nz
+        nlen = (ax * ax + ay * ay + az * az) ** 0.5
         if nlen < 1e-10:
-            return
-        axis_world = axis_world / nlen
-        if float(np.dot(axis_world, t)) < 0:
-            axis_world = -axis_world
+            return True
+        inv = 1.0 / nlen
+        ax, ay, az = ax * inv, ay * inv, az * inv
+        if ax * tx + ay * ty + az * tz < 0.0:
+            ax, ay, az = -ax, -ay, -az
         if pen < min_pen:
             min_pen = pen
-            best_n = axis_world
+            best_nx, best_ny, best_nz = ax, ay, az
+        return True
 
     for i in range(3):
         ra = float(ha[i])
@@ -665,7 +787,8 @@ def _sat_obb_overlap(
         pen = ra + rb - abs(float(t_a[i]))
         if pen <= 0:
             return None
-        consider(pen, Ae[i])
+        col = Ra[:, i]
+        consider(pen, float(col[0]), float(col[1]), float(col[2]))
 
     t_b = Rb.T @ t
     for i in range(3):
@@ -674,37 +797,45 @@ def _sat_obb_overlap(
         pen = ra + rb - abs(float(t_b[i]))
         if pen <= 0:
             return None
-        consider(pen, Be[i])
+        col = Rb[:, i]
+        consider(pen, float(col[0]), float(col[1]), float(col[2]))
 
+    # Edge-edge axes (skip near-parallel edges)
     for i in range(3):
+        aex, aey, aez = float(Ae[i][0]), float(Ae[i][1]), float(Ae[i][2])
         for j in range(3):
-            axis = _cross(Ae[i], Be[j])
-            nlen = float(np.linalg.norm(axis))
-            if nlen < 1e-8:
+            bex, bey, bez = float(Be[j][0]), float(Be[j][1]), float(Be[j][2])
+            ax, ay, az = _cross3(aex, aey, aez, bex, bey, bez)
+            nlen2 = ax * ax + ay * ay + az * az
+            if nlen2 < 1e-16:
                 continue
-            axis_n = axis / nlen
-            ra = float(
-                ha[0] * abs(float(np.dot(Ae[0], axis_n)))
-                + ha[1] * abs(float(np.dot(Ae[1], axis_n)))
-                + ha[2] * abs(float(np.dot(Ae[2], axis_n)))
+            inv = 1.0 / (nlen2 ** 0.5)
+            ax, ay, az = ax * inv, ay * inv, az * inv
+            ra = (
+                float(ha[0]) * abs(_dot3(float(Ae[0][0]), float(Ae[0][1]), float(Ae[0][2]), ax, ay, az))
+                + float(ha[1]) * abs(_dot3(float(Ae[1][0]), float(Ae[1][1]), float(Ae[1][2]), ax, ay, az))
+                + float(ha[2]) * abs(_dot3(float(Ae[2][0]), float(Ae[2][1]), float(Ae[2][2]), ax, ay, az))
             )
-            rb = float(
-                hb[0] * abs(float(np.dot(Be[0], axis_n)))
-                + hb[1] * abs(float(np.dot(Be[1], axis_n)))
-                + hb[2] * abs(float(np.dot(Be[2], axis_n)))
+            rb = (
+                float(hb[0]) * abs(_dot3(float(Be[0][0]), float(Be[0][1]), float(Be[0][2]), ax, ay, az))
+                + float(hb[1]) * abs(_dot3(float(Be[1][0]), float(Be[1][1]), float(Be[1][2]), ax, ay, az))
+                + float(hb[2]) * abs(_dot3(float(Be[2][0]), float(Be[2][1]), float(Be[2][2]), ax, ay, az))
             )
-            pen = ra + rb - abs(float(np.dot(t, axis_n)))
+            pen = ra + rb - abs(ax * tx + ay * ty + az * tz)
             if pen <= 0:
                 return None
-            consider(pen, axis_n)
+            consider(pen, ax, ay, az)
 
-    if best_n is None or min_pen >= 1e29:
+    if min_pen >= 1e29:
         return None
 
-    n = best_n
-    if float(np.dot(n, a.position - b.position)) < 0:
-        n = -n
-    return n, float(min_pen)
+    # normal from b toward a
+    abx = float(a.position[0] - b.position[0])
+    aby = float(a.position[1] - b.position[1])
+    abz = float(a.position[2] - b.position[2])
+    if best_nx * abx + best_ny * aby + best_nz * abz < 0.0:
+        best_nx, best_ny, best_nz = -best_nx, -best_ny, -best_nz
+    return np.array([best_nx, best_ny, best_nz], dtype=np.float64), float(min_pen)
 
 
 def _corner_penetration(box: RigidBody, point: np.ndarray) -> Optional[float]:
@@ -731,48 +862,59 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
     Multi-point box-box manifold.
 
     SAT finds the separating axis / normal. Penetrating *corners* of each box
-    into the other become contact points (capped at 4 deepest). Resting on a
-    floor then yields 4 foot-corners — spin dies, stacks stabilize — and a
-    box with COM past the rim only has contacts on the supported side so
-    gravity produces real tipping torque. No edge special-cases.
+    into the other become contact points. Against a static floor we keep up to
+    4 feet (stable rest + tip torque). Dynamic–dynamic pairs keep at most 2
+    (cheaper, still spins from offset hits).
     """
     sat = _sat_obb_overlap(a, b)
     if sat is None:
         return []
-    n, _min_pen = sat
+    n, min_pen = sat
 
-    candidates: List[Tuple[float, np.ndarray]] = []
+    max_pts = 4 if (a.static or b.static) else 2
+
+    candidates: List[Tuple[float, float, float, float]] = []  # pen, x, y, z
 
     # Corners of A inside B
     for corner in a.world_corners():
         pen = _corner_penetration(b, corner)
         if pen is not None and pen > 1e-6:
-            candidates.append((float(pen), corner.copy()))
+            candidates.append(
+                (float(pen), float(corner[0]), float(corner[1]), float(corner[2]))
+            )
 
     # Corners of B inside A
     for corner in b.world_corners():
         pen = _corner_penetration(a, corner)
         if pen is not None and pen > 1e-6:
-            candidates.append((float(pen), corner.copy()))
+            candidates.append(
+                (float(pen), float(corner[0]), float(corner[1]), float(corner[2]))
+            )
 
     if not candidates:
-        # Edge-edge or face-center only: fall back to closest-point pair
         point = _contact_point_on_normal(a, b, n)
-        return [Contact(a, b, n, _min_pen, point)]
+        return [Contact(a, b, n, min_pen, point)]
 
-    # Keep up to 4 deepest, de-duplicate near-identical points
     candidates.sort(key=lambda t: t[0], reverse=True)
-    picked: List[Tuple[float, np.ndarray]] = []
-    for pen, pt in candidates:
-        if any(float(np.linalg.norm(pt - q)) < 1e-3 for _, q in picked):
+    picked: List[Tuple[float, float, float, float]] = []
+    for pen, x, y, z in candidates:
+        if any((x - qx) ** 2 + (y - qy) ** 2 + (z - qz) ** 2 < 1e-6 for _, qx, qy, qz in picked):
             continue
-        picked.append((pen, pt))
-        if len(picked) >= 4:
+        picked.append((pen, x, y, z))
+        if len(picked) >= max_pts:
             break
 
     scale = 1.0 / float(len(picked))
     return [
-        Contact(a, b, n, pen, pt, manifold_scale=scale) for pen, pt in picked
+        Contact(
+            a,
+            b,
+            n,
+            pen,
+            np.array([x, y, z], dtype=np.float64),
+            manifold_scale=scale,
+        )
+        for pen, x, y, z in picked
     ]
 
 
@@ -785,98 +927,106 @@ def _resolve_contact(
     max_bias: float = 0.15,
 ) -> None:
     a, b = c.a, c.b
-    n = c.normal
-    p = c.point
+    nx, ny, nz = float(c.normal[0]), float(c.normal[1]), float(c.normal[2])
+    px, py, pz = float(c.point[0]), float(c.point[1]), float(c.point[2])
 
-    # relative velocity at contact point (includes spin)
-    va = a.velocity_at_point(p)
-    vb = b.velocity_at_point(p)
-    rv = va - vb
-    vel_n = float(np.dot(rv, n))
+    vax, vay, vaz = a.velocity_at_xyz(px, py, pz)
+    vbx, vby, vbz = b.velocity_at_xyz(px, py, pz)
+    rvx, rvy, rvz = vax - vbx, vay - vby, vaz - vbz
+    vel_n = rvx * nx + rvy * ny + rvz * nz
 
-    e = float(np.sqrt(max(a.restitution, 0.0) * max(b.restitution, 0.0)))
-    ra = p - a.position
-    rb = p - b.position
-
-    def angular_denom(body: RigidBody, r: np.ndarray, axis: np.ndarray) -> float:
-        """(r × axis) · I^{-1} (r × axis) — correct effective mass term."""
-        if body.static:
-            return 0.0
-        r_x_axis = _cross(r, axis)
-        return float(np.dot(r_x_axis, body.inv_inertia_world() @ r_x_axis))
+    e = (max(a.restitution, 0.0) * max(b.restitution, 0.0)) ** 0.5
+    rax = px - float(a.position[0])
+    ray = py - float(a.position[1])
+    raz = pz - float(a.position[2])
+    rbx = px - float(b.position[0])
+    rby = py - float(b.position[1])
+    rbz = pz - float(b.position[2])
 
     denom = (
         a.inv_mass
         + b.inv_mass
-        + angular_denom(a, ra, n)
-        + angular_denom(b, rb, n)
+        + a.angular_denom_xyz(rax, ray, raz, nx, ny, nz)
+        + b.angular_denom_xyz(rbx, rby, rbz, nx, ny, nz)
     )
     if denom <= 1e-12:
         return
 
-    pen = max(c.penetration - slop, 0.0)
-    mscale = float(getattr(c, "manifold_scale", 1.0))
-    impact = max(0.0, -vel_n)
+    pen = c.penetration - slop
+    if pen < 0.0:
+        pen = 0.0
+    mscale = c.manifold_scale
+    impact = -vel_n if vel_n < 0.0 else 0.0
     resting = impact < bounce_threshold
 
-    # Resting contacts: kill approach velocity only — no restitution, no
-    # Baumgarte velocity goal. Uncapped bias was the rest-hop source.
     if resting:
-        e_eff = 0.0
-        bias = 0.0
-        # If already separating, do not pull back together.
-        j = max(0.0, -vel_n / denom) if vel_n < 0.0 else 0.0
+        j = (-vel_n / denom) if vel_n < 0.0 else 0.0
+        if j < 0.0:
+            j = 0.0
     else:
-        e_eff = e
-        raw_bias = (
-            (baumgarte * mscale * pen / max(dt, 1e-4)) if pen > 0 else 0.0
-        )
-        bias = min(raw_bias, max_bias)
-        # Standard bounce: post normal rel-vel ≈ -e * pre, plus capped bias.
-        j = (-(1.0 + e_eff) * min(vel_n, 0.0) - bias) / denom
-        j = max(0.0, j)
+        raw_bias = (baumgarte * mscale * pen / dt) if (pen > 0.0 and dt > 1e-4) else 0.0
+        if dt <= 1e-4 and pen > 0.0:
+            raw_bias = baumgarte * mscale * pen / 1e-4
+        bias = raw_bias if raw_bias < max_bias else max_bias
+        vn_neg = vel_n if vel_n < 0.0 else 0.0
+        j = (-(1.0 + e) * vn_neg - bias) / denom
+        if j < 0.0:
+            j = 0.0
 
-    j = float(np.clip(j, 0.0, 50.0))
-    if j > 0:
-        impulse = n * j
-        a.apply_impulse_at(impulse, p)
-        b.apply_impulse_at(-impulse, p)
+    if j > 50.0:
+        j = 50.0
+    if j > 0.0:
+        a.apply_impulse_xyz(nx * j, ny * j, nz * j, px, py, pz)
+        b.apply_impulse_xyz(-nx * j, -ny * j, -nz * j, px, py, pz)
 
-    # Friction at every contact point (corner manifold kills yaw skate)
-    va = a.velocity_at_point(p)
-    vb = b.velocity_at_point(p)
-    rv = va - vb
-    tangent = rv - n * float(np.dot(rv, n))
-    tlen = float(np.linalg.norm(tangent))
+    # Friction
+    vax, vay, vaz = a.velocity_at_xyz(px, py, pz)
+    vbx, vby, vbz = b.velocity_at_xyz(px, py, pz)
+    rvx, rvy, rvz = vax - vbx, vay - vby, vaz - vbz
+    vn = rvx * nx + rvy * ny + rvz * nz
+    tx, ty, tz = rvx - nx * vn, rvy - ny * vn, rvz - nz * vn
+    tlen = (tx * tx + ty * ty + tz * tz) ** 0.5
     if tlen > 1e-5:
-        t_hat = tangent / tlen
+        inv_t = 1.0 / tlen
+        thx, thy, thz = tx * inv_t, ty * inv_t, tz * inv_t
         denom_t = (
             a.inv_mass
             + b.inv_mass
-            + angular_denom(a, ra, t_hat)
-            + angular_denom(b, rb, t_hat)
+            + a.angular_denom_xyz(rax, ray, raz, thx, thy, thz)
+            + b.angular_denom_xyz(rbx, rby, rbz, thx, thy, thz)
         )
         if denom_t > 1e-12:
-            jt = -float(np.dot(rv, t_hat)) / denom_t
+            jt = -(rvx * thx + rvy * thy + rvz * thz) / denom_t
             mu = (a.friction + b.friction) * 0.5
             if resting:
-                mu = max(mu * 1.4, 0.7)
-                # Allow enough friction to kill residual slide/spin at rest
-                # without a huge free impulse that re-energizes the contact.
-                j_cap = max(j * mu, 0.08 * mu if j < 1e-6 else j * mu)
+                mu = mu * 1.4 if mu * 1.4 > 0.7 else 0.7
+                j_cap = j * mu
+                if j < 1e-6:
+                    floor_cap = 0.08 * mu
+                    if floor_cap > j_cap:
+                        j_cap = floor_cap
             else:
                 j_cap = j * mu
-            jt = float(np.clip(jt, -j_cap, j_cap))
-            a.apply_impulse_at(t_hat * jt, p)
-            b.apply_impulse_at(-t_hat * jt, p)
+            if jt > j_cap:
+                jt = j_cap
+            elif jt < -j_cap:
+                jt = -j_cap
+            a.apply_impulse_xyz(thx * jt, thy * jt, thz * jt, px, py, pz)
+            b.apply_impulse_xyz(-thx * jt, -thy * jt, -thz * jt, px, py, pz)
 
-    # Gentle positional correction only for deep penetration (not rest hop).
+    # Gentle positional correction
     if pen > slop:
         inv = a.inv_mass + b.inv_mass
         if inv > 1e-12:
             strength = (0.15 if resting else 0.25) * mscale
-            correction = n * (strength * pen / inv)
+            corr = strength * pen / inv
             if not a.static:
-                a.position = a.position + correction * a.inv_mass
+                s = corr * a.inv_mass
+                a.position[0] += nx * s
+                a.position[1] += ny * s
+                a.position[2] += nz * s
             if not b.static:
-                b.position = b.position - correction * b.inv_mass
+                s = corr * b.inv_mass
+                b.position[0] -= nx * s
+                b.position[1] -= ny * s
+                b.position[2] -= nz * s

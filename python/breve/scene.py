@@ -94,8 +94,8 @@ class SceneController(PhysicalControl):
                 self.set_gravity(_v3(g, (0, -9.8, 0)))
             else:
                 self.full_gravity()
-            # 2 substeps/frame balances stability vs pure-Python solver cost
-            self.set_integration_step(0.008)
+            # One physics substep per display frame keeps pure-Python realtime.
+            self.set_integration_step(0.016)
             self.set_iteration_step(0.016)
         else:
             # kinematic: no gravity forces, but allow agents
