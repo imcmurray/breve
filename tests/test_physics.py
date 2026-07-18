@@ -147,6 +147,43 @@ def test_box_does_not_freeze_on_edge():
     assert c.box.location.y < 0.32
 
 
+def test_dynamic_support_does_not_force_face_down():
+    """Tip nudge must not run when another dynamic body is supporting the pose."""
+    from breve.physics import _apply_contact_rest
+
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.set_integration_step(0.016)
+            self.set_iteration_step(0.016)
+            self.full_gravity()
+            self.box = breve.Mobile()
+            self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+            self.box.move(breve.vector(0, 1.0, 0))
+            self.box.enable_physics(mass=1.0)
+            pb = breve.get_engine().physics.get_body(self.box)
+            a = np.deg2rad(40) / 2
+            pb.orientation = np.array(
+                [np.cos(a), 0.0, 0.0, np.sin(a)], dtype=np.float64
+            )
+            pb.velocity[:] = 0.0
+            pb.angular_velocity[:] = 0.0
+
+    c = C()
+    body = breve.get_engine().physics.get_body(c.box)
+    # Simulate rest while propped by another box (dynamic support)
+    for _ in range(60):
+        body.velocity[:] = 0.0
+        _apply_contact_rest(body, sleep_frames_needed=4, dt=0.016, has_dynamic_support=True)
+    # Must stay nearly still — no face-align spin injected
+    assert float(np.linalg.norm(body.angular_velocity)) < 0.05
+    R = body.rotation_matrix()
+    face_align = max(abs(float(R[1, i])) for i in range(3))
+    # Orientation unchanged (still tilted ~40°)
+    assert face_align < 0.92
+
+
 def test_offset_hit_spins_box():
     """Impulse away from COM should produce angular velocity."""
     set_engine(Engine())
