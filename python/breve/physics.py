@@ -332,7 +332,8 @@ class PhysicsWorld:
         self._by_owner: dict = {}
         self.iterations: int = 6
         # Position-only passes after velocity solve (push deep overlaps apart).
-        self.position_iterations: int = 3
+        # Keep low: each pass re-detects contacts (expensive); Numba path does 1.
+        self.position_iterations: int = 1
         # Allow a little overlap without velocity bias (kills rest hop).
         self.slop: float = 0.006
         self.baumgarte: float = 0.15
@@ -483,18 +484,22 @@ class PhysicsWorld:
             self._step_python(dt)
 
     def _step_numba(self, dt: float) -> None:
-        """Pack bodies → Numba integrate/resolve → unpack (optional fast path)."""
+        """Pack bodies → Numba integrate/find/resolve → unpack."""
         global _NUMBA_WARMED
         if not _NUMBA_WARMED:
             _numba_warmup()
             _NUMBA_WARMED = True
 
         from breve.physics_kernels import (
+            KIND_BOX,
+            KIND_SPHERE,
+            find_contacts_packed,
             integrate_bodies,
             inv_inertia_world_batch,
             quat_to_R,
             resolve_contacts_batch,
         )
+        from breve.shapes import Box, Sphere
 
         bodies = self.bodies
         n = len(bodies)
@@ -511,21 +516,68 @@ class PhysicsWorld:
         awake = np.empty(n, dtype=np.bool_)
         restitution = np.empty(n, dtype=np.float64)
         friction = np.empty(n, dtype=np.float64)
+        kind = np.empty(n, dtype=np.int64)
+        half = np.zeros((n, 3), dtype=np.float64)
+        radius = np.zeros(n, dtype=np.float64)
+        broad_r = np.zeros(n, dtype=np.float64)
 
         for i, b in enumerate(bodies):
-            pos[i] = b.position
-            vel[i] = b.velocity
-            omega[i] = b.angular_velocity
-            quat[i] = b.orientation
+            pos[i, 0] = b.position[0]
+            pos[i, 1] = b.position[1]
+            pos[i, 2] = b.position[2]
+            vel[i, 0] = b.velocity[0]
+            vel[i, 1] = b.velocity[1]
+            vel[i, 2] = b.velocity[2]
+            omega[i, 0] = b.angular_velocity[0]
+            omega[i, 1] = b.angular_velocity[1]
+            omega[i, 2] = b.angular_velocity[2]
+            quat[i, 0] = b.orientation[0]
+            quat[i, 1] = b.orientation[1]
+            quat[i, 2] = b.orientation[2]
+            quat[i, 3] = b.orientation[3]
             inv_mass[i] = 0.0 if b.static else b.inv_mass
-            inv_I_local[i] = b.inv_inertia_local
+            inv_I_local[i, 0] = b.inv_inertia_local[0]
+            inv_I_local[i, 1] = b.inv_inertia_local[1]
+            inv_I_local[i, 2] = b.inv_inertia_local[2]
             mass[i] = b.mass
-            force[i] = b.force
-            torque[i] = b.torque
+            force[i, 0] = b.force[0]
+            force[i, 1] = b.force[1]
+            force[i, 2] = b.force[2]
+            torque[i, 0] = b.torque[0]
+            torque[i, 1] = b.torque[1]
+            torque[i, 2] = b.torque[2]
             is_static[i] = b.static
             awake[i] = b.awake
             restitution[i] = b.restitution
             friction[i] = b.friction
+            col = b.collider
+            if col is not None and col.kind == ShapeKind.BOX:
+                kind[i] = KIND_BOX
+                half[i, 0] = col.data[0]
+                half[i, 1] = col.data[1]
+                half[i, 2] = col.data[2]
+                broad_r[i] = float(
+                    (half[i, 0] ** 2 + half[i, 1] ** 2 + half[i, 2] ** 2) ** 0.5
+                )
+            elif col is not None and col.kind == ShapeKind.SPHERE:
+                kind[i] = KIND_SPHERE
+                radius[i] = col.data[0]
+                broad_r[i] = radius[i]
+            else:
+                # fall back from owner shape
+                sh = getattr(b.owner, "shape", None)
+                if isinstance(sh, Box):
+                    kind[i] = KIND_BOX
+                    half[i, 0] = float(sh.size.x) * 0.5
+                    half[i, 1] = float(sh.size.y) * 0.5
+                    half[i, 2] = float(sh.size.z) * 0.5
+                    broad_r[i] = float(
+                        (half[i, 0] ** 2 + half[i, 1] ** 2 + half[i, 2] ** 2) ** 0.5
+                    )
+                else:
+                    kind[i] = KIND_SPHERE
+                    radius[i] = float(sh.radius) if isinstance(sh, Sphere) else 0.25
+                    broad_r[i] = radius[i]
 
         R = np.empty((n, 3, 3), dtype=np.float64)
         inv_I = np.empty((n, 3, 3), dtype=np.float64)
@@ -534,150 +586,93 @@ class PhysicsWorld:
 
         gx, gy, gz = float(self.gravity[0]), float(self.gravity[1]), float(self.gravity[2])
         integrate_bodies(
-            pos,
-            vel,
-            omega,
-            quat,
-            inv_mass,
-            inv_I,
-            mass,
-            force,
-            torque,
-            is_static,
-            awake,
-            gx,
-            gy,
-            gz,
-            float(dt),
-            float(self.linear_damping),
-            float(self.angular_damping),
+            pos, vel, omega, quat, inv_mass, inv_I, mass, force, torque,
+            is_static, awake, gx, gy, gz, float(dt),
+            float(self.linear_damping), float(self.angular_damping),
         )
-        # rotation changed → refresh world inertia for contact resolve
         quat_to_R(quat, R)
         inv_inertia_world_batch(R, inv_I_local, is_static, inv_I)
 
-        # Write pose back so Python collision sees updated positions
-        for i, b in enumerate(bodies):
-            b.position[:] = pos[i]
-            b.velocity[:] = vel[i]
-            b.angular_velocity[:] = omega[i]
-            b.orientation[:] = quat[i]
-            b.force[:] = 0.0
-            b.torque[:] = 0.0
-            b.invalidate_cache()
-            b._R = R[i].copy()
-            b._inv_I_w = inv_I[i].copy()
+        # Contact buffers (n*(n-1)/2 * 4 max points is plenty for demos)
+        max_m = max(64, n * n * 2)
+        ca = np.empty(max_m, dtype=np.int64)
+        cb = np.empty(max_m, dtype=np.int64)
+        cn = np.empty((max_m, 3), dtype=np.float64)
+        cp = np.empty((max_m, 3), dtype=np.float64)
+        cpen = np.empty(max_m, dtype=np.float64)
+        cmscale = np.empty(max_m, dtype=np.float64)
 
-        body_index = {id(b): i for i, b in enumerate(bodies)}
-        contacts = self._find_contacts()
-        if contacts:
-            m = len(contacts)
-            ca = np.empty(m, dtype=np.int64)
-            cb = np.empty(m, dtype=np.int64)
-            cn = np.empty((m, 3), dtype=np.float64)
-            cp = np.empty((m, 3), dtype=np.float64)
-            cpen = np.empty(m, dtype=np.float64)
-            cmscale = np.empty(m, dtype=np.float64)
-            for i, c in enumerate(contacts):
-                ca[i] = body_index[id(c.a)]
-                cb[i] = body_index[id(c.b)]
-                cn[i] = c.normal
-                cp[i] = c.point
-                cpen[i] = c.penetration
-                cmscale[i] = c.manifold_scale
+        m = find_contacts_packed(
+            pos, R, half, kind, radius, is_static, broad_r,
+            ca, cb, cn, cp, cpen, cmscale,
+        )
+        last_m = m
 
+        if m > 0:
             resolve_contacts_batch(
-                pos,
-                vel,
-                omega,
-                inv_mass,
-                inv_I,
-                restitution,
-                friction,
-                is_static,
-                ca,
-                cb,
-                cn,
-                cp,
-                cpen,
-                cmscale,
-                float(self.slop),
-                float(self.baumgarte),
-                float(self.bounce_threshold),
-                float(dt),
-                float(self.max_bias),
-                float(self.deep_bias),
-                0,
-                int(self.iterations),
+                pos, vel, omega, inv_mass, inv_I, restitution, friction, is_static,
+                ca[:m], cb[:m], cn[:m], cp[:m], cpen[:m], cmscale[:m],
+                float(self.slop), float(self.baumgarte), float(self.bounce_threshold),
+                float(dt), float(self.max_bias), float(self.deep_bias),
+                0, int(self.iterations),
             )
-
-            # Position-only passes with refreshed contacts
-            for _ in range(self.position_iterations):
-                for i, b in enumerate(bodies):
-                    b.position[:] = pos[i]
-                    b.velocity[:] = vel[i]
-                    b.angular_velocity[:] = omega[i]
-                    b.invalidate_cache()
-                    b._R = R[i].copy()
-                    b._inv_I_w = inv_I[i].copy()
-                contacts = self._find_contacts()
-                if not contacts:
-                    break
-                m = len(contacts)
-                ca = np.empty(m, dtype=np.int64)
-                cb = np.empty(m, dtype=np.int64)
-                cn = np.empty((m, 3), dtype=np.float64)
-                cp = np.empty((m, 3), dtype=np.float64)
-                cpen = np.empty(m, dtype=np.float64)
-                cmscale = np.empty(m, dtype=np.float64)
-                for i, c in enumerate(contacts):
-                    ca[i] = body_index[id(c.a)]
-                    cb[i] = body_index[id(c.b)]
-                    cn[i] = c.normal
-                    cp[i] = c.point
-                    cpen[i] = c.penetration
-                    cmscale[i] = c.manifold_scale
-                resolve_contacts_batch(
-                    pos,
-                    vel,
-                    omega,
-                    inv_mass,
-                    inv_I,
-                    restitution,
-                    friction,
-                    is_static,
-                    ca,
-                    cb,
-                    cn,
-                    cp,
-                    cpen,
-                    cmscale,
-                    float(self.slop),
-                    float(self.baumgarte),
-                    float(self.bounce_threshold),
-                    float(dt),
-                    float(self.max_bias),
-                    float(self.deep_bias),
-                    1,
-                    1,
+            # Position-only pass(es) with refreshed Numba contacts
+            for _ in range(max(1, self.position_iterations)):
+                m2 = find_contacts_packed(
+                    pos, R, half, kind, radius, is_static, broad_r,
+                    ca, cb, cn, cp, cpen, cmscale,
                 )
+                if m2 <= 0:
+                    break
+                last_m = m2
+                resolve_contacts_batch(
+                    pos, vel, omega, inv_mass, inv_I, restitution, friction, is_static,
+                    ca[:m2], cb[:m2], cn[:m2], cp[:m2], cpen[:m2], cmscale[:m2],
+                    float(self.slop), float(self.baumgarte), float(self.bounce_threshold),
+                    float(dt), float(self.max_bias), float(self.deep_bias),
+                    1, 1,
+                )
+        m = last_m
 
-        # Rest damping (Python — small N); pass contact partners for support checks
-        support = _contact_support_map(contacts)
+        # Unpack + rest (build lightweight support from contact indices)
+        dyn_support = np.zeros(n, dtype=np.bool_)
+        in_contact = np.zeros(n, dtype=np.bool_)
+        if m > 0:
+            for k in range(m):
+                i, j = int(ca[k]), int(cb[k])
+                in_contact[i] = True
+                in_contact[j] = True
+                if not is_static[i] and not is_static[j]:
+                    dyn_support[i] = True
+                    dyn_support[j] = True
+
         for i, body in enumerate(bodies):
-            body.position[:] = pos[i]
-            body.velocity[:] = vel[i]
-            body.angular_velocity[:] = omega[i]
-            body.orientation[:] = quat[i]
+            body.position[0] = pos[i, 0]
+            body.position[1] = pos[i, 1]
+            body.position[2] = pos[i, 2]
+            body.velocity[0] = vel[i, 0]
+            body.velocity[1] = vel[i, 1]
+            body.velocity[2] = vel[i, 2]
+            body.angular_velocity[0] = omega[i, 0]
+            body.angular_velocity[1] = omega[i, 1]
+            body.angular_velocity[2] = omega[i, 2]
+            body.orientation[0] = quat[i, 0]
+            body.orientation[1] = quat[i, 1]
+            body.orientation[2] = quat[i, 2]
+            body.orientation[3] = quat[i, 3]
+            body.force[:] = 0.0
+            body.torque[:] = 0.0
             body.invalidate_cache()
             if body.static:
                 continue
-            info = support.get(id(body))
-            if info is None:
+            if not in_contact[i]:
                 body._sleep_frames = 0
                 continue
             _apply_contact_rest(
-                body, self.sleep_frames_needed, dt, has_dynamic_support=info[0]
+                body,
+                self.sleep_frames_needed,
+                dt,
+                has_dynamic_support=bool(dyn_support[i]),
             )
 
     def _step_python(self, dt: float) -> None:

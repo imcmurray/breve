@@ -531,6 +531,479 @@ def inv_inertia_world_batch(
         out[i, 2, 2] = m20 * R[i, 2, 0] + m21 * R[i, 2, 1] + m22 * R[i, 2, 2]
 
 
+KIND_SPHERE = 0
+KIND_BOX = 1
+
+
+@njit(cache=True)
+def _point_in_obb_pen(
+    px: float,
+    py: float,
+    pz: float,
+    bx: float,
+    by: float,
+    bz: float,
+    R: np.ndarray,
+    bi: int,
+    hx: float,
+    hy: float,
+    hz: float,
+) -> float:
+    """Penetration depth if point inside OBB bi, else -1."""
+    dx = px - bx
+    dy = py - by
+    dz = pz - bz
+    # local = R^T * d
+    lx = R[bi, 0, 0] * dx + R[bi, 1, 0] * dy + R[bi, 2, 0] * dz
+    ly = R[bi, 0, 1] * dx + R[bi, 1, 1] * dy + R[bi, 2, 1] * dz
+    lz = R[bi, 0, 2] * dx + R[bi, 1, 2] * dy + R[bi, 2, 2] * dz
+    if abs(lx) > hx + 1e-9 or abs(ly) > hy + 1e-9 or abs(lz) > hz + 1e-9:
+        return -1.0
+    dxp = hx - abs(lx)
+    dyp = hy - abs(ly)
+    dzp = hz - abs(lz)
+    pen = dxp
+    if dyp < pen:
+        pen = dyp
+    if dzp < pen:
+        pen = dzp
+    return pen
+
+
+@njit(cache=True)
+def _sat_box_box(
+    pos: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    ai: int,
+    bi: int,
+) -> Tuple[float, float, float, float]:
+    """
+    Returns (pen, nx, ny, nz) with normal from bi toward ai, or pen<=0 if separated.
+    """
+    ax, ay, az = pos[ai, 0], pos[ai, 1], pos[ai, 2]
+    bx, by, bz = pos[bi, 0], pos[bi, 1], pos[bi, 2]
+    tx, ty, tz = bx - ax, by - ay, bz - az
+    ha0, ha1, ha2 = half[ai, 0], half[ai, 1], half[ai, 2]
+    hb0, hb1, hb2 = half[bi, 0], half[bi, 1], half[bi, 2]
+
+    min_pen = 1e30
+    bnx, bny, bnz = 0.0, 1.0, 0.0
+
+    # rotation of B in A frame AbsR
+    # Rrel[i,j] = Ae_i · Be_j
+    for i in range(3):
+        # A face axis i
+        ax_x, ax_y, ax_z = R[ai, 0, i], R[ai, 1, i], R[ai, 2, i]
+        ra = half[ai, i]
+        rb = (
+            hb0 * abs(R[ai, 0, i] * R[bi, 0, 0] + R[ai, 1, i] * R[bi, 1, 0] + R[ai, 2, i] * R[bi, 2, 0])
+            + hb1 * abs(R[ai, 0, i] * R[bi, 0, 1] + R[ai, 1, i] * R[bi, 1, 1] + R[ai, 2, i] * R[bi, 2, 1])
+            + hb2 * abs(R[ai, 0, i] * R[bi, 0, 2] + R[ai, 1, i] * R[bi, 1, 2] + R[ai, 2, i] * R[bi, 2, 2])
+        )
+        # t along axis
+        t_a = ax_x * tx + ax_y * ty + ax_z * tz
+        pen = ra + rb - abs(t_a)
+        if pen <= 0.0:
+            return -1.0, 0.0, 1.0, 0.0
+        if pen < min_pen:
+            min_pen = pen
+            # orient axis along t (from a to b) then flip to from b toward a later
+            if t_a < 0.0:
+                bnx, bny, bnz = -ax_x, -ax_y, -ax_z
+            else:
+                bnx, bny, bnz = ax_x, ax_y, ax_z
+
+    for i in range(3):
+        bx_x, bx_y, bx_z = R[bi, 0, i], R[bi, 1, i], R[bi, 2, i]
+        rb = half[bi, i]
+        ra = (
+            ha0 * abs(R[bi, 0, i] * R[ai, 0, 0] + R[bi, 1, i] * R[ai, 1, 0] + R[bi, 2, i] * R[ai, 2, 0])
+            + ha1 * abs(R[bi, 0, i] * R[ai, 0, 1] + R[bi, 1, i] * R[ai, 1, 1] + R[bi, 2, i] * R[ai, 2, 1])
+            + ha2 * abs(R[bi, 0, i] * R[ai, 0, 2] + R[bi, 1, i] * R[ai, 1, 2] + R[bi, 2, i] * R[ai, 2, 2])
+        )
+        t_b = bx_x * tx + bx_y * ty + bx_z * tz
+        pen = ra + rb - abs(t_b)
+        if pen <= 0.0:
+            return -1.0, 0.0, 1.0, 0.0
+        if pen < min_pen:
+            min_pen = pen
+            if t_b < 0.0:
+                bnx, bny, bnz = -bx_x, -bx_y, -bx_z
+            else:
+                bnx, bny, bnz = bx_x, bx_y, bx_z
+
+    # edge-edge axes
+    for i in range(3):
+        aex, aey, aez = R[ai, 0, i], R[ai, 1, i], R[ai, 2, i]
+        for j in range(3):
+            bex, bey, bez = R[bi, 0, j], R[bi, 1, j], R[bi, 2, j]
+            cx, cy, cz = _cross(aex, aey, aez, bex, bey, bez)
+            n2 = cx * cx + cy * cy + cz * cz
+            if n2 < 1e-16:
+                continue
+            inv = 1.0 / (n2 ** 0.5)
+            cx, cy, cz = cx * inv, cy * inv, cz * inv
+            ra = (
+                ha0 * abs(R[ai, 0, 0] * cx + R[ai, 1, 0] * cy + R[ai, 2, 0] * cz)
+                + ha1 * abs(R[ai, 0, 1] * cx + R[ai, 1, 1] * cy + R[ai, 2, 1] * cz)
+                + ha2 * abs(R[ai, 0, 2] * cx + R[ai, 1, 2] * cy + R[ai, 2, 2] * cz)
+            )
+            rb = (
+                hb0 * abs(R[bi, 0, 0] * cx + R[bi, 1, 0] * cy + R[bi, 2, 0] * cz)
+                + hb1 * abs(R[bi, 0, 1] * cx + R[bi, 1, 1] * cy + R[bi, 2, 1] * cz)
+                + hb2 * abs(R[bi, 0, 2] * cx + R[bi, 1, 2] * cy + R[bi, 2, 2] * cz)
+            )
+            td = cx * tx + cy * ty + cz * tz
+            pen = ra + rb - abs(td)
+            if pen <= 0.0:
+                return -1.0, 0.0, 1.0, 0.0
+            if pen < min_pen:
+                min_pen = pen
+                if td < 0.0:
+                    bnx, bny, bnz = -cx, -cy, -cz
+                else:
+                    bnx, bny, bnz = cx, cy, cz
+
+    # normal from b toward a: should point roughly a - b
+    abx, aby, abz = ax - bx, ay - by, az - bz
+    if bnx * abx + bny * aby + bnz * abz < 0.0:
+        bnx, bny, bnz = -bnx, -bny, -bnz
+    return min_pen, bnx, bny, bnz
+
+
+@njit(cache=True)
+def _append_box_box_manifold(
+    pos: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    ai: int,
+    bi: int,
+    pen: float,
+    nx: float,
+    ny: float,
+    nz: float,
+    max_pts: int,
+    out_a: np.ndarray,
+    out_b: np.ndarray,
+    out_n: np.ndarray,
+    out_p: np.ndarray,
+    out_pen: np.ndarray,
+    out_scale: np.ndarray,
+    count: int,
+    max_m: int,
+) -> int:
+    """Add up to max_pts corner contacts; returns new count."""
+    # gather candidate corners
+    pens = np.empty(16, dtype=np.float64)
+    cxs = np.empty(16, dtype=np.float64)
+    cys = np.empty(16, dtype=np.float64)
+    czs = np.empty(16, dtype=np.float64)
+    nc = 0
+    signs = (-1.0, 1.0)
+    # corners of A inside B
+    for sx in signs:
+        for sy in signs:
+            for sz in signs:
+                lx, ly, lz = sx * half[ai, 0], sy * half[ai, 1], sz * half[ai, 2]
+                wx = pos[ai, 0] + R[ai, 0, 0] * lx + R[ai, 0, 1] * ly + R[ai, 0, 2] * lz
+                wy = pos[ai, 1] + R[ai, 1, 0] * lx + R[ai, 1, 1] * ly + R[ai, 1, 2] * lz
+                wz = pos[ai, 2] + R[ai, 2, 0] * lx + R[ai, 2, 1] * ly + R[ai, 2, 2] * lz
+                p = _point_in_obb_pen(
+                    wx, wy, wz, pos[bi, 0], pos[bi, 1], pos[bi, 2], R, bi,
+                    half[bi, 0], half[bi, 1], half[bi, 2],
+                )
+                if p > 1e-6 and nc < 16:
+                    pens[nc] = p
+                    cxs[nc] = wx
+                    cys[nc] = wy
+                    czs[nc] = wz
+                    nc += 1
+    # corners of B inside A
+    for sx in signs:
+        for sy in signs:
+            for sz in signs:
+                lx, ly, lz = sx * half[bi, 0], sy * half[bi, 1], sz * half[bi, 2]
+                wx = pos[bi, 0] + R[bi, 0, 0] * lx + R[bi, 0, 1] * ly + R[bi, 0, 2] * lz
+                wy = pos[bi, 1] + R[bi, 1, 0] * lx + R[bi, 1, 1] * ly + R[bi, 1, 2] * lz
+                wz = pos[bi, 2] + R[bi, 2, 0] * lx + R[bi, 2, 1] * ly + R[bi, 2, 2] * lz
+                p = _point_in_obb_pen(
+                    wx, wy, wz, pos[ai, 0], pos[ai, 1], pos[ai, 2], R, ai,
+                    half[ai, 0], half[ai, 1], half[ai, 2],
+                )
+                if p > 1e-6 and nc < 16:
+                    pens[nc] = p
+                    cxs[nc] = wx
+                    cys[nc] = wy
+                    czs[nc] = wz
+                    nc += 1
+
+    if nc == 0:
+        # fallback midpoint of centers projected
+        if count >= max_m:
+            return count
+        out_a[count] = ai
+        out_b[count] = bi
+        out_n[count, 0] = nx
+        out_n[count, 1] = ny
+        out_n[count, 2] = nz
+        out_p[count, 0] = 0.5 * (pos[ai, 0] + pos[bi, 0])
+        out_p[count, 1] = 0.5 * (pos[ai, 1] + pos[bi, 1])
+        out_p[count, 2] = 0.5 * (pos[ai, 2] + pos[bi, 2])
+        out_pen[count] = pen
+        out_scale[count] = 1.0
+        return count + 1
+
+    # pick deepest unique points
+    picked = 0
+    pxs = np.empty(4, dtype=np.float64)
+    pys = np.empty(4, dtype=np.float64)
+    pzs = np.empty(4, dtype=np.float64)
+    used = np.zeros(nc, dtype=np.bool_)
+    for _k in range(max_pts):
+        best = -1
+        best_p = -1.0
+        for i in range(nc):
+            if used[i]:
+                continue
+            if pens[i] > best_p:
+                best_p = pens[i]
+                best = i
+        if best < 0:
+            break
+        # de-dupe
+        dup = False
+        for j in range(picked):
+            dx = cxs[best] - pxs[j]
+            dy = cys[best] - pys[j]
+            dz = czs[best] - pzs[j]
+            if dx * dx + dy * dy + dz * dz < 1e-6:
+                dup = True
+                break
+        used[best] = True
+        if dup:
+            continue
+        pxs[picked] = cxs[best]
+        pys[picked] = cys[best]
+        pzs[picked] = czs[best]
+        picked += 1
+        if picked >= max_pts:
+            break
+
+    if picked == 0:
+        return count
+    scale = 1.0 / float(picked)
+    for j in range(picked):
+        if count >= max_m:
+            break
+        out_a[count] = ai
+        out_b[count] = bi
+        out_n[count, 0] = nx
+        out_n[count, 1] = ny
+        out_n[count, 2] = nz
+        out_p[count, 0] = pxs[j]
+        out_p[count, 1] = pys[j]
+        out_p[count, 2] = pzs[j]
+        out_pen[count] = pen  # SAT depth
+        out_scale[count] = scale
+        count += 1
+    return count
+
+
+@njit(cache=True)
+def find_contacts_packed(
+    pos: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    kind: np.ndarray,
+    radius: np.ndarray,
+    is_static: np.ndarray,
+    broad_r: np.ndarray,
+    out_a: np.ndarray,
+    out_b: np.ndarray,
+    out_n: np.ndarray,
+    out_p: np.ndarray,
+    out_pen: np.ndarray,
+    out_scale: np.ndarray,
+) -> int:
+    """
+    Broadphase + sphere/box contacts. Returns number of contacts written.
+    out_* preallocated; max is out_a.shape[0].
+    """
+    n = pos.shape[0]
+    max_m = out_a.shape[0]
+    count = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            if is_static[i] and is_static[j]:
+                continue
+            dx = pos[i, 0] - pos[j, 0]
+            dy = pos[i, 1] - pos[j, 1]
+            dz = pos[i, 2] - pos[j, 2]
+            rsum = broad_r[i] + broad_r[j]
+            if dx * dx + dy * dy + dz * dz > rsum * rsum:
+                continue
+            ki, kj = kind[i], kind[j]
+            if ki == KIND_SPHERE and kj == KIND_SPHERE:
+                if count >= max_m:
+                    return count
+                dist = (dx * dx + dy * dy + dz * dz) ** 0.5
+                ra, rb = radius[i], radius[j]
+                if dist <= 1e-12:
+                    nx, ny, nz = 0.0, 1.0, 0.0
+                    dist = 0.0
+                else:
+                    inv = 1.0 / dist
+                    nx, ny, nz = dx * inv, dy * inv, dz * inv
+                pen = ra + rb - dist
+                if pen <= 0.0:
+                    continue
+                out_a[count] = i
+                out_b[count] = j
+                out_n[count, 0] = nx
+                out_n[count, 1] = ny
+                out_n[count, 2] = nz
+                out_p[count, 0] = pos[j, 0] + nx * rb
+                out_p[count, 1] = pos[j, 1] + ny * rb
+                out_p[count, 2] = pos[j, 2] + nz * rb
+                out_pen[count] = pen
+                out_scale[count] = 1.0
+                count += 1
+            elif ki == KIND_BOX and kj == KIND_BOX:
+                pen, nx, ny, nz = _sat_box_box(pos, R, half, i, j)
+                if pen <= 0.0:
+                    continue
+                max_pts = 4 if (is_static[i] or is_static[j]) else 3
+                count = _append_box_box_manifold(
+                    pos, R, half, i, j, pen, nx, ny, nz, max_pts,
+                    out_a, out_b, out_n, out_p, out_pen, out_scale, count, max_m,
+                )
+            elif ki == KIND_SPHERE and kj == KIND_BOX:
+                # sphere i vs box j
+                count = _sphere_box_contact(
+                    pos, R, half, radius, i, j, True,
+                    out_a, out_b, out_n, out_p, out_pen, out_scale, count, max_m,
+                )
+            elif ki == KIND_BOX and kj == KIND_SPHERE:
+                count = _sphere_box_contact(
+                    pos, R, half, radius, j, i, False,
+                    out_a, out_b, out_n, out_p, out_pen, out_scale, count, max_m,
+                )
+    return count
+
+
+@njit(cache=True)
+def _sphere_box_contact(
+    pos: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    radius: np.ndarray,
+    si: int,
+    bi: int,
+    sphere_is_a: bool,
+    out_a: np.ndarray,
+    out_b: np.ndarray,
+    out_n: np.ndarray,
+    out_p: np.ndarray,
+    out_pen: np.ndarray,
+    out_scale: np.ndarray,
+    count: int,
+    max_m: int,
+) -> int:
+    if count >= max_m:
+        return count
+    # sphere center in box local
+    dx = pos[si, 0] - pos[bi, 0]
+    dy = pos[si, 1] - pos[bi, 1]
+    dz = pos[si, 2] - pos[bi, 2]
+    lx = R[bi, 0, 0] * dx + R[bi, 1, 0] * dy + R[bi, 2, 0] * dz
+    ly = R[bi, 0, 1] * dx + R[bi, 1, 1] * dy + R[bi, 2, 1] * dz
+    lz = R[bi, 0, 2] * dx + R[bi, 1, 2] * dy + R[bi, 2, 2] * dz
+    hx, hy, hz = half[bi, 0], half[bi, 1], half[bi, 2]
+    cx = lx
+    if cx > hx:
+        cx = hx
+    if cx < -hx:
+        cx = -hx
+    cy = ly
+    if cy > hy:
+        cy = hy
+    if cy < -hy:
+        cy = -hy
+    cz = lz
+    if cz > hz:
+        cz = hz
+    if cz < -hz:
+        cz = -hz
+    # closest world
+    cwx = pos[bi, 0] + R[bi, 0, 0] * cx + R[bi, 0, 1] * cy + R[bi, 0, 2] * cz
+    cwy = pos[bi, 1] + R[bi, 1, 0] * cx + R[bi, 1, 1] * cy + R[bi, 1, 2] * cz
+    cwz = pos[bi, 2] + R[bi, 2, 0] * cx + R[bi, 2, 1] * cy + R[bi, 2, 2] * cz
+    ddx = pos[si, 0] - cwx
+    ddy = pos[si, 1] - cwy
+    ddz = pos[si, 2] - cwz
+    dist = (ddx * ddx + ddy * ddy + ddz * ddz) ** 0.5
+    r = radius[si]
+    if dist < 1e-12:
+        # center inside: push out least pen axis
+        faces_pen = np.empty(6, dtype=np.float64)
+        faces_pen[0] = hx - lx
+        faces_pen[1] = hx + lx
+        faces_pen[2] = hy - ly
+        faces_pen[3] = hy + ly
+        faces_pen[4] = hz - lz
+        faces_pen[5] = hz + lz
+        best = 0
+        bestp = faces_pen[0]
+        for k in range(1, 6):
+            if faces_pen[k] < bestp:
+                bestp = faces_pen[k]
+                best = k
+        if best == 0:
+            nx, ny, nz = R[bi, 0, 0], R[bi, 1, 0], R[bi, 2, 0]
+        elif best == 1:
+            nx, ny, nz = -R[bi, 0, 0], -R[bi, 1, 0], -R[bi, 2, 0]
+        elif best == 2:
+            nx, ny, nz = R[bi, 0, 1], R[bi, 1, 1], R[bi, 2, 1]
+        elif best == 3:
+            nx, ny, nz = -R[bi, 0, 1], -R[bi, 1, 1], -R[bi, 2, 1]
+        elif best == 4:
+            nx, ny, nz = R[bi, 0, 2], R[bi, 1, 2], R[bi, 2, 2]
+        else:
+            nx, ny, nz = -R[bi, 0, 2], -R[bi, 1, 2], -R[bi, 2, 2]
+        pen = bestp + r
+    else:
+        inv = 1.0 / dist
+        nx, ny, nz = ddx * inv, ddy * inv, ddz * inv
+        pen = r - dist
+        if pen <= 0.0:
+            return count
+    # Contact stores a,b with normal from b toward a in our solver convention
+    # for sphere-box we want normal pointing from box toward sphere typically
+    # Original: sphere vs box returns Contact(sphere, box, normal) normal from closest to sphere
+    if sphere_is_a:
+        # a=sphere i, b=box j — normal from box toward sphere = nx
+        out_a[count] = si
+        out_b[count] = bi
+        out_n[count, 0] = nx
+        out_n[count, 1] = ny
+        out_n[count, 2] = nz
+    else:
+        # a=box i, b=sphere j in pair order — we passed sphere_is_a False with si=sphere, bi=box
+        # pair was box,sphere so out should be a=box bi, b=sphere si, normal from sphere to box = -n
+        out_a[count] = bi
+        out_b[count] = si
+        out_n[count, 0] = -nx
+        out_n[count, 1] = -ny
+        out_n[count, 2] = -nz
+    out_p[count, 0] = cwx
+    out_p[count, 1] = cwy
+    out_p[count, 2] = cwz
+    out_pen[count] = pen
+    out_scale[count] = 1.0
+    return count + 1
+
+
 def warmup() -> None:
     """Force-compile kernels once (first sim step still pays if skipped)."""
     if not NUMBA_AVAILABLE:
@@ -570,3 +1043,17 @@ def warmup() -> None:
         ca, cb, cn, cp, cpen, cmscale,
         0.006, 0.15, 0.8, 0.016, 0.25, 0.8, 0, 1,
     )
+    # contact find path
+    kind = np.array([KIND_SPHERE, KIND_BOX], dtype=np.int64)
+    half = np.zeros((n, 3), dtype=np.float64)
+    half[1, :] = 0.5
+    radius = np.array([0.2, 0.0], dtype=np.float64)
+    broad = np.array([0.2, 0.9], dtype=np.float64)
+    max_m = 32
+    oa = np.empty(max_m, dtype=np.int64)
+    ob = np.empty(max_m, dtype=np.int64)
+    on = np.empty((max_m, 3), dtype=np.float64)
+    op = np.empty((max_m, 3), dtype=np.float64)
+    open_ = np.empty(max_m, dtype=np.float64)
+    osc = np.empty(max_m, dtype=np.float64)
+    find_contacts_packed(pos, R, half, kind, radius, is_static, broad, oa, ob, on, op, open_, osc)
