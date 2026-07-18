@@ -326,12 +326,16 @@ class PhysicsWorld:
         self.gravity = np.array([0.0, -9.8, 0.0], dtype=np.float64)
         self.bodies: List[RigidBody] = []
         self._by_owner: dict = {}
-        self.iterations: int = 5
+        self.iterations: int = 6
+        # Position-only passes after velocity solve (push deep overlaps apart).
+        self.position_iterations: int = 3
         # Allow a little overlap without velocity bias (kills rest hop).
-        self.slop: float = 0.008
-        self.baumgarte: float = 0.12
+        self.slop: float = 0.006
+        self.baumgarte: float = 0.15
         # Cap Baumgarte separation goal (m/s) — uncapped bias causes perpetual bounce.
-        self.max_bias: float = 0.15
+        self.max_bias: float = 0.25
+        # Extra separation velocity allowed only for deep sinks (m/s).
+        self.deep_bias: float = 0.8
         self.linear_damping: float = 0.02
         self.angular_damping: float = 0.06
         # Below this approach speed, contacts are "resting" (no restitution).
@@ -341,7 +345,7 @@ class PhysicsWorld:
         self.sleep_frames_needed: int = 4
         # multi-point caps (static pairs need more feet for rest; dynamic can be thinner)
         self.max_manifold_static: int = 4
-        self.max_manifold_dynamic: int = 2
+        self.max_manifold_dynamic: int = 3
 
     def set_gravity(self, x: float, y: float, z: float) -> None:
         self.gravity = np.array([float(x), float(y), float(z)], dtype=np.float64)
@@ -545,6 +549,26 @@ class PhysicsWorld:
                     self.bounce_threshold,
                     dt,
                     self.max_bias,
+                    self.deep_bias,
+                    position_only=False,
+                )
+        # Separate position projection so deep multi-body piles de-penetrate
+        # without needing huge velocity bias (which causes rest hop).
+        for _ in range(self.position_iterations):
+            # refresh contacts after previous projection moves bodies
+            contacts = self._find_contacts()
+            if not contacts:
+                break
+            for c in contacts:
+                _resolve_contact(
+                    c,
+                    self.slop,
+                    self.baumgarte,
+                    self.bounce_threshold,
+                    dt,
+                    self.max_bias,
+                    self.deep_bias,
+                    position_only=True,
                 )
 
         # Contact damping + rest zero. Free-fall (not in contact) is never damped.
@@ -871,24 +895,36 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
         return []
     n, min_pen = sat
 
-    max_pts = 4 if (a.static or b.static) else 2
+    max_pts = 4 if (a.static or b.static) else 3
 
-    candidates: List[Tuple[float, float, float, float]] = []  # pen, x, y, z
+    candidates: List[Tuple[float, float, float, float]] = []  # score, x, y, z
+
+    # Prefer corners that are deep *along the SAT normal* (not just any face),
+    # so manifold penetration matches the true overlap axis.
+    nx, ny, nz = float(n[0]), float(n[1]), float(n[2])
+
+    def score_corner(point: np.ndarray, from_a: bool) -> Optional[float]:
+        """How deep this corner sits along the contact normal."""
+        pen = _corner_penetration(b if from_a else a, point)
+        if pen is None or pen <= 1e-6:
+            return None
+        # Project: corners on the contacting side score higher
+        return float(pen)
 
     # Corners of A inside B
     for corner in a.world_corners():
-        pen = _corner_penetration(b, corner)
-        if pen is not None and pen > 1e-6:
+        sc = score_corner(corner, True)
+        if sc is not None:
             candidates.append(
-                (float(pen), float(corner[0]), float(corner[1]), float(corner[2]))
+                (sc, float(corner[0]), float(corner[1]), float(corner[2]))
             )
 
     # Corners of B inside A
     for corner in b.world_corners():
-        pen = _corner_penetration(a, corner)
-        if pen is not None and pen > 1e-6:
+        sc = score_corner(corner, False)
+        if sc is not None:
             candidates.append(
-                (float(pen), float(corner[0]), float(corner[1]), float(corner[2]))
+                (sc, float(corner[0]), float(corner[1]), float(corner[2]))
             )
 
     if not candidates:
@@ -896,25 +932,27 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
         return [Contact(a, b, n, min_pen, point)]
 
     candidates.sort(key=lambda t: t[0], reverse=True)
-    picked: List[Tuple[float, float, float, float]] = []
-    for pen, x, y, z in candidates:
-        if any((x - qx) ** 2 + (y - qy) ** 2 + (z - qz) ** 2 < 1e-6 for _, qx, qy, qz in picked):
+    picked: List[Tuple[float, float, float]] = []
+    for _sc, x, y, z in candidates:
+        if any((x - qx) ** 2 + (y - qy) ** 2 + (z - qz) ** 2 < 1e-6 for qx, qy, qz in picked):
             continue
-        picked.append((pen, x, y, z))
+        picked.append((x, y, z))
         if len(picked) >= max_pts:
             break
 
+    # All points share the SAT overlap depth so projection is consistent.
+    # Manifold scale keeps multi-point position correction from exploding.
     scale = 1.0 / float(len(picked))
     return [
         Contact(
             a,
             b,
             n,
-            pen,
+            min_pen,
             np.array([x, y, z], dtype=np.float64),
             manifold_scale=scale,
         )
-        for pen, x, y, z in picked
+        for x, y, z in picked
     ]
 
 
@@ -924,11 +962,48 @@ def _resolve_contact(
     baumgarte: float,
     bounce_threshold: float,
     dt: float = 1.0 / 60.0,
-    max_bias: float = 0.15,
+    max_bias: float = 0.25,
+    deep_bias: float = 0.8,
+    position_only: bool = False,
 ) -> None:
     a, b = c.a, c.b
     nx, ny, nz = float(c.normal[0]), float(c.normal[1]), float(c.normal[2])
     px, py, pz = float(c.point[0]), float(c.point[1]), float(c.point[2])
+
+    pen_raw = c.penetration - slop
+    if pen_raw < 0.0:
+        pen_raw = 0.0
+    mscale = c.manifold_scale
+
+    # --- position projection (also used alone in position_iterations) ---
+    if pen_raw > 0.0:
+        inv = a.inv_mass + b.inv_mass
+        if inv > 1e-12:
+            # Nonlinear: shallow rest barely moves; deep piles push hard.
+            if pen_raw > 0.08:
+                frac = 0.85
+            elif pen_raw > 0.04:
+                frac = 0.55
+            elif pen_raw > 0.02:
+                frac = 0.35
+            else:
+                frac = 0.18 if position_only else 0.12
+            # Multi-point: share correction but never starve deep contacts.
+            frac *= max(mscale, 0.4 if pen_raw > 0.03 else mscale)
+            corr = frac * pen_raw / inv
+            if not a.static:
+                s = corr * a.inv_mass
+                a.position[0] += nx * s
+                a.position[1] += ny * s
+                a.position[2] += nz * s
+            if not b.static:
+                s = corr * b.inv_mass
+                b.position[0] -= nx * s
+                b.position[1] -= ny * s
+                b.position[2] -= nz * s
+
+    if position_only:
+        return
 
     vax, vay, vaz = a.velocity_at_xyz(px, py, pz)
     vbx, vby, vbz = b.velocity_at_xyz(px, py, pz)
@@ -952,15 +1027,18 @@ def _resolve_contact(
     if denom <= 1e-12:
         return
 
-    pen = c.penetration - slop
-    if pen < 0.0:
-        pen = 0.0
-    mscale = c.manifold_scale
+    pen = pen_raw
     impact = -vel_n if vel_n < 0.0 else 0.0
     resting = impact < bounce_threshold
 
     if resting:
+        # Kill approach; if sunk deep, add modest separation goal (not rest hop).
         j = (-vel_n / denom) if vel_n < 0.0 else 0.0
+        if pen > 0.03:
+            bias = pen * 6.0 * mscale
+            if bias > deep_bias:
+                bias = deep_bias
+            j += bias / denom
         if j < 0.0:
             j = 0.0
     else:
@@ -968,6 +1046,10 @@ def _resolve_contact(
         if dt <= 1e-4 and pen > 0.0:
             raw_bias = baumgarte * mscale * pen / 1e-4
         bias = raw_bias if raw_bias < max_bias else max_bias
+        if pen > 0.05:
+            # deep impact: allow higher separation goal
+            if bias < deep_bias * 0.5:
+                bias = deep_bias * 0.5
         vn_neg = vel_n if vel_n < 0.0 else 0.0
         j = (-(1.0 + e) * vn_neg - bias) / denom
         if j < 0.0:
@@ -1013,20 +1095,3 @@ def _resolve_contact(
                 jt = -j_cap
             a.apply_impulse_xyz(thx * jt, thy * jt, thz * jt, px, py, pz)
             b.apply_impulse_xyz(-thx * jt, -thy * jt, -thz * jt, px, py, pz)
-
-    # Gentle positional correction
-    if pen > slop:
-        inv = a.inv_mass + b.inv_mass
-        if inv > 1e-12:
-            strength = (0.15 if resting else 0.25) * mscale
-            corr = strength * pen / inv
-            if not a.static:
-                s = corr * a.inv_mass
-                a.position[0] += nx * s
-                a.position[1] += ny * s
-                a.position[2] += nz * s
-            if not b.static:
-                s = corr * b.inv_mass
-                b.position[0] -= nx * s
-                b.position[1] -= ny * s
-                b.position[2] -= nz * s
