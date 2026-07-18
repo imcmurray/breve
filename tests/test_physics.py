@@ -57,6 +57,34 @@ def test_sphere_bounces_on_box():
     assert c.ball.location.y > 0.05
 
 
+def test_box_falls_off_floor_edge():
+    """COM past the edge of a platform must not stay magically supported."""
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.set_integration_step(0.004)
+            self.set_iteration_step(0.016)
+            self.full_gravity()
+            # small platform centered at origin
+            floor = breve.Stationary()
+            floor.set_shape(breve.Box().init_with(breve.vector(2.0, 0.2, 2.0)))
+            floor.move(breve.vector(0, -0.1, 0))
+            breve.get_engine().register_physics_body(floor, static=True)
+            # box mostly off +X edge (center at x=1.2, platform only to x=1.0)
+            self.box = breve.Mobile()
+            self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+            self.box.move(breve.vector(1.25, 0.4, 0))
+            self.box.set_velocity(breve.vector(0, 0, 0))
+            self.box.enable_physics(mass=1.0)
+
+    c = C()
+    y0 = c.box.location.y
+    c.run(steps=80)
+    # should have fallen well below the platform top
+    assert c.box.location.y < y0 - 0.5
+
+
 def test_gravity_demo_runs():
     set_engine(Engine())
     import importlib.util

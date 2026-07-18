@@ -255,6 +255,8 @@ class PhysicsWorld:
                     continue
                 hit = _collide(a, b)
                 if hit is not None:
+                    hit = _filter_unsupported_edge(hit)
+                if hit is not None:
                     contacts.append(hit)
         return contacts
 
@@ -293,6 +295,54 @@ def _collide(a: RigidBody, b: RigidBody) -> Optional[Contact]:
     if ka == ShapeKind.BOX and kb == ShapeKind.BOX:
         return _box_box(a, b)
     return None
+
+
+def _horizontal_support_ok(upper: RigidBody, lower: RigidBody) -> bool:
+    """
+    True if upper's center of mass lies over lower's horizontal footprint.
+
+    AABB stacks with no rotation otherwise "hover" when only a corner still
+    overlaps a floor or another box. Real objects tip off; we approximate by
+    dropping vertical support once the COM leaves the support face.
+    """
+    if lower.collider is None:
+        return True
+    dx = float(upper.position[0] - lower.position[0])
+    dz = float(upper.position[2] - lower.position[2])
+
+    if lower.collider.kind == ShapeKind.BOX:
+        hx, _, hz = (float(x) for x in lower.collider.data)
+        # slightly inside the face so a tiny overhang still falls
+        return abs(dx) <= hx * 0.88 and abs(dz) <= hz * 0.88
+
+    if lower.collider.kind == ShapeKind.SPHERE:
+        r = float(lower.collider.data[0])
+        return (dx * dx + dz * dz) <= (r * 0.85) ** 2
+
+    return True
+
+
+def _filter_unsupported_edge(c: Contact) -> Optional[Contact]:
+    """Drop vertical contacts when the upper body COM is past the edge."""
+    n = c.normal
+    # only vertical-ish support/separation
+    if abs(float(n[1])) < 0.8:
+        return c
+
+    a, b = c.a, c.b
+    # normal points out of b into a → if n.y > 0, a is above b
+    if float(n[1]) > 0:
+        upper, lower = a, b
+    else:
+        upper, lower = b, a
+
+    # both dynamic stacked: same rule (top of stack hanging off lower box)
+    if upper.static:
+        return c
+
+    if not _horizontal_support_ok(upper, lower):
+        return None
+    return c
 
 
 def _sphere_sphere(a: RigidBody, b: RigidBody) -> Optional[Contact]:
