@@ -678,26 +678,7 @@ class PhysicsWorld:
             if id(body) not in in_contact:
                 body._sleep_frames = 0
                 continue
-            vx, vy, vz = float(vel[i, 0]), float(vel[i, 1]), float(vel[i, 2])
-            wx, wy, wz = float(omega[i, 0]), float(omega[i, 1]), float(omega[i, 2])
-            speed = (vx * vx + vy * vy + vz * vz) ** 0.5
-            spin = (wx * wx + wy * wy + wz * wz) ** 0.5
-            if speed < 0.35 and spin < 0.8:
-                body.velocity[0] *= 0.85
-                body.velocity[1] *= 0.85
-                body.velocity[2] *= 0.85
-                body.angular_velocity[0] *= 0.78
-                body.angular_velocity[1] *= 0.78
-                body.angular_velocity[2] *= 0.78
-                speed *= 0.85
-                spin *= 0.78
-            if speed < 0.12 and spin < 0.25:
-                body._sleep_frames += 1
-                if body._sleep_frames >= self.sleep_frames_needed:
-                    body.velocity[:] = 0.0
-                    body.angular_velocity[:] = 0.0
-            else:
-                body._sleep_frames = 0
+            _apply_contact_rest(body, self.sleep_frames_needed, dt)
 
     def _step_python(self, dt: float) -> None:
         gx, gy, gz = float(self.gravity[0]), float(self.gravity[1]), float(self.gravity[2])
@@ -808,31 +789,7 @@ class PhysicsWorld:
             if id(body) not in in_contact:
                 body._sleep_frames = 0
                 continue
-            vx, vy, vz = float(body.velocity[0]), float(body.velocity[1]), float(body.velocity[2])
-            wx, wy, wz = (
-                float(body.angular_velocity[0]),
-                float(body.angular_velocity[1]),
-                float(body.angular_velocity[2]),
-            )
-            speed = (vx * vx + vy * vy + vz * vz) ** 0.5
-            spin = (wx * wx + wy * wy + wz * wz) ** 0.5
-            # Soft dissipation when nearly settled — leave energetic tip/fall free.
-            if speed < 0.35 and spin < 0.8:
-                body.velocity[0] *= 0.85
-                body.velocity[1] *= 0.85
-                body.velocity[2] *= 0.85
-                body.angular_velocity[0] *= 0.78
-                body.angular_velocity[1] *= 0.78
-                body.angular_velocity[2] *= 0.78
-                speed *= 0.85
-                spin *= 0.78
-            if speed < 0.12 and spin < 0.25:
-                body._sleep_frames += 1
-                if body._sleep_frames >= self.sleep_frames_needed:
-                    body.velocity[:] = 0.0
-                    body.angular_velocity[:] = 0.0
-            else:
-                body._sleep_frames = 0
+            _apply_contact_rest(body, self.sleep_frames_needed, dt)
 
     def _find_contacts(self) -> List[Contact]:
         contacts: List[Contact] = []
@@ -1180,6 +1137,112 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
         )
         for x, y, z in picked
     ]
+
+
+def _orientation_face_stable(body: RigidBody, threshold: float = 0.90) -> bool:
+    """
+    True if a face is nearly horizontal (stable resting pose).
+
+    Edge/corner poses have no local axis nearly aligned with world-up, so we
+    must NOT sleep them — gravity + offset contact torque needs free spin to tip.
+    """
+    R = body.rotation_matrix()
+    # world-Y components of the three local axes
+    for i in range(3):
+        if abs(float(R[1, i])) >= threshold:
+            return True
+    return False
+
+
+def _nearest_up_axis(body: RigidBody) -> Tuple[int, float, float, float, float]:
+    """
+    Local axis index closest to world-up, signed alignment, and that axis in world.
+    Returns (axis_index, abs_dot, ax, ay, az) with ay >= 0 (flipped if needed).
+    """
+    R = body.rotation_matrix()
+    best_i, best_abs = 0, -1.0
+    for i in range(3):
+        d = abs(float(R[1, i]))
+        if d > best_abs:
+            best_abs = d
+            best_i = i
+    ax, ay, az = float(R[0, best_i]), float(R[1, best_i]), float(R[2, best_i])
+    if ay < 0.0:
+        ax, ay, az = -ax, -ay, -az
+    return best_i, best_abs, ax, ay, az
+
+
+def _nudge_unstable_tip(body: RigidBody, dt: float) -> None:
+    """
+    Break metastable edge/corner equilibria.
+
+    With COM exactly above an edge, net contact torque can be ~0 and numerical
+    rest freezes the pose. A soft torque toward the nearest face-down orientation
+    lowers potential energy (same direction gravity would tip a slightly perturbed box).
+    """
+    if body.static or body.inv_mass <= 0:
+        return
+    _i, align, ax, ay, az = _nearest_up_axis(body)
+    if align >= 0.90:
+        return
+    # axis × world_up = (ax,ay,az)×(0,1,0) = (-az, 0, ax)
+    # strength grows as the pose is more unstable (align → 0.5 on a cube edge)
+    mis = 1.0 - align
+    # ~ few rad/s² · mis — strong enough to tip in <1s, weak enough not to fight impacts
+    strength = 12.0 * mis * mis
+    body.angular_velocity[0] += (-az) * strength * dt
+    body.angular_velocity[2] += ax * strength * dt
+
+
+def _apply_contact_rest(body: RigidBody, sleep_frames_needed: int, dt: float = 1.0 / 60.0) -> None:
+    """
+    Soft rest damping for bodies in contact.
+
+    Full v/ω zero only when nearly still AND a face is flat on the support.
+    Edge/corner poses stay free to tip, with a soft face-align nudge so perfect
+    numerical edge-balance does not freeze forever.
+    """
+    vx, vy, vz = (
+        float(body.velocity[0]),
+        float(body.velocity[1]),
+        float(body.velocity[2]),
+    )
+    wx, wy, wz = (
+        float(body.angular_velocity[0]),
+        float(body.angular_velocity[1]),
+        float(body.angular_velocity[2]),
+    )
+    speed = (vx * vx + vy * vy + vz * vz) ** 0.5
+    spin = (wx * wx + wy * wy + wz * wz) ** 0.5
+    stable = _orientation_face_stable(body)
+
+    if stable:
+        # Flat-ish rest: damp slide + spin so piles settle
+        if speed < 0.35 and spin < 0.8:
+            body.velocity[0] *= 0.85
+            body.velocity[1] *= 0.85
+            body.velocity[2] *= 0.85
+            body.angular_velocity[0] *= 0.78
+            body.angular_velocity[1] *= 0.78
+            body.angular_velocity[2] *= 0.78
+            speed *= 0.85
+            spin *= 0.78
+        if speed < 0.12 and spin < 0.25:
+            body._sleep_frames += 1
+            if body._sleep_frames >= sleep_frames_needed:
+                body.velocity[:] = 0.0
+                body.angular_velocity[:] = 0.0
+        else:
+            body._sleep_frames = 0
+    else:
+        # Unstable pose (edge/corner): do not sleep; soft tip toward face-down.
+        body._sleep_frames = 0
+        if speed < 0.35:
+            body.velocity[0] *= 0.98
+            body.velocity[1] *= 0.98
+            body.velocity[2] *= 0.98
+        if speed < 0.45 and spin < 2.5:
+            _nudge_unstable_tip(body, dt)
 
 
 def _resolve_contact(

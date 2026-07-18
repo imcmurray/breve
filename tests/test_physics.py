@@ -112,6 +112,41 @@ def test_box_stack_tips_off_edge():
     assert all(b.location.y < -0.5 for b in c.boxes)
 
 
+def test_box_does_not_freeze_on_edge():
+    """A cube on an edge (45°) must tip to a face — not sleep mid-pose."""
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.set_integration_step(0.016)
+            self.set_iteration_step(0.016)
+            self.full_gravity()
+            floor = breve.Stationary()
+            floor.set_shape(breve.Box().init_with(breve.vector(8, 0.2, 8)))
+            floor.move(breve.vector(0, -0.1, 0))
+            breve.get_engine().register_physics_body(floor, static=True)
+            self.box = breve.Mobile()
+            self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+            self.box.move(breve.vector(0, 1.2, 0))
+            self.box.enable_physics(mass=1.0)
+            pb = breve.get_engine().physics.get_body(self.box)
+            # 45° about Z → diamond edge contact (metastable if frozen)
+            a = np.deg2rad(45) / 2
+            pb.orientation = np.array(
+                [np.cos(a), 0.0, 0.0, np.sin(a)], dtype=np.float64
+            )
+            pb.restitution = 0.1
+            pb.friction = 0.55
+
+    c = C()
+    c.run(steps=180)
+    body = breve.get_engine().physics.get_body(c.box)
+    R = body.rotation_matrix()
+    face_align = max(abs(float(R[1, i])) for i in range(3))
+    assert face_align > 0.90, f"box stuck on edge, face_align={face_align}"
+    assert c.box.location.y < 0.32
+
+
 def test_offset_hit_spins_box():
     """Impulse away from COM should produce angular velocity."""
     set_engine(Engine())
