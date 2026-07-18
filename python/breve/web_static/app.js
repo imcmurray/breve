@@ -21,96 +21,87 @@ const state = {
 };
 
 // ---------------------------------------------------------------------------
-// Physics tweaks — pretty sliders, per-demo localStorage survival
+// Lab controls — accordion groups, population, mass ranges, per-demo storage
 // ---------------------------------------------------------------------------
 
 const TWEAK_DEFAULTS = {
   speed: 1,
   gravity: 1,
+  extraBoxes: 0,
+  extraBalls: 0,
   massAll: 1,
-  massBalls: 1,
-  massBoxes: 1,
+  ballMassMin: 0.3,
+  ballMassMax: 18,
+  boxMassMin: 0.2,
+  boxMassMax: 2.5,
   bounce: 1,
   friction: 1,
   velocity: 1,
+  randomness: 1,
+  sizeJitter: 0,
 };
 
-const TWEAK_DEFS = [
+const TWEAK_GROUPS = [
   {
-    key: "speed",
-    label: "Sim speed",
-    min: 0.25,
-    max: 3,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
-    live: true, // no scene rebuild
+    id: "world",
+    title: "World",
+    open: true,
+    summary: (t) => `${t.speed.toFixed(1)}× · g ${t.gravity.toFixed(1)}×`,
+    items: [
+      { key: "speed", label: "Sim speed", min: 0.25, max: 3, step: 0.05, format: (v) => `${v.toFixed(2)}×`, live: true },
+      { key: "gravity", label: "Gravity", min: 0.1, max: 3, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+    ],
   },
   {
-    key: "gravity",
-    label: "Gravity",
-    min: 0.1,
-    max: 3,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
+    id: "pop",
+    title: "Population",
+    open: true,
+    summary: (t) => `+${t.extraBoxes|0} □ · +${t.extraBalls|0} ○`,
+    items: [
+      { key: "extraBoxes", label: "Extra boxes", min: 0, max: 40, step: 1, format: (v) => String(Math.round(v)), int: true },
+      { key: "extraBalls", label: "Extra balls", min: 0, max: 24, step: 1, format: (v) => String(Math.round(v)), int: true },
+      { key: "randomness", label: "Spawn scatter", min: 0, max: 2.5, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+      { key: "sizeJitter", label: "Size variety", min: 0, max: 0.6, step: 0.02, format: (v) => `±${Math.round(v * 100)}%` },
+    ],
   },
   {
-    key: "massAll",
-    label: "All dynamic mass",
-    min: 0.15,
-    max: 5,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
+    id: "mass",
+    title: "Mass range",
+    open: true,
+    summary: (t) => `○ ${t.ballMassMin.toFixed(1)}–${t.ballMassMax.toFixed(1)}`,
+    items: [
+      { key: "massAll", label: "Global mass ×", min: 0.15, max: 5, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+      { key: "ballMassMin", label: "Balls min mass", min: 0.05, max: 30, step: 0.05, format: (v) => v.toFixed(2) },
+      { key: "ballMassMax", label: "Balls max mass", min: 0.05, max: 40, step: 0.05, format: (v) => v.toFixed(2) },
+      { key: "boxMassMin", label: "Boxes min mass", min: 0.05, max: 12, step: 0.05, format: (v) => v.toFixed(2) },
+      { key: "boxMassMax", label: "Boxes max mass", min: 0.05, max: 20, step: 0.05, format: (v) => v.toFixed(2) },
+    ],
   },
   {
-    key: "massBalls",
-    label: "Balls mass",
-    min: 0.15,
-    max: 8,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
-  },
-  {
-    key: "massBoxes",
-    label: "Boxes mass",
-    min: 0.15,
-    max: 5,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
-  },
-  {
-    key: "bounce",
-    label: "Bounce",
-    min: 0,
-    max: 2,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
-  },
-  {
-    key: "friction",
-    label: "Friction",
-    min: 0,
-    max: 2.5,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
-  },
-  {
-    key: "velocity",
-    label: "Launch velocity",
-    min: 0,
-    max: 3,
-    step: 0.05,
-    format: (v) => `${v.toFixed(2)}×`,
+    id: "feel",
+    title: "Feel & launch",
+    open: false,
+    summary: (t) => `b${t.bounce.toFixed(1)} f${t.friction.toFixed(1)}`,
+    items: [
+      { key: "bounce", label: "Bounce", min: 0, max: 2, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+      { key: "friction", label: "Friction", min: 0, max: 2.5, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+      { key: "velocity", label: "Launch velocity", min: 0, max: 3, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+    ],
   },
 ];
 
+const TWEAK_DEFS = TWEAK_GROUPS.flatMap((g) => g.items);
+
 function storageKeyFor(sceneKey) {
-  return `breve_tweaks_v1:${sceneKey || "custom"}`;
+  return `breve_tweaks_v2:${sceneKey || "custom"}`;
 }
 
 function loadTweaks(sceneKey) {
   const base = { ...TWEAK_DEFAULTS };
   try {
-    const raw = localStorage.getItem(storageKeyFor(sceneKey));
+    // migrate v1 if present
+    let raw = localStorage.getItem(storageKeyFor(sceneKey));
+    if (!raw) raw = localStorage.getItem(`breve_tweaks_v1:${sceneKey || "custom"}`);
     if (!raw) return base;
     const parsed = JSON.parse(raw);
     for (const d of TWEAK_DEFS) {
@@ -118,7 +109,29 @@ function loadTweaks(sceneKey) {
         base[d.key] = clamp(parsed[d.key], d.min, d.max);
       }
     }
+    // legacy massBalls/massBoxes → midpoints in range if new keys missing
+    if (parsed.massBalls != null && parsed.ballMassMin == null) {
+      const m = Number(parsed.massBalls) || 1;
+      base.ballMassMin = clamp(0.3 * m, 0.05, 30);
+      base.ballMassMax = clamp(16 * m, 0.05, 40);
+    }
+    if (parsed.massBoxes != null && parsed.boxMassMin == null) {
+      const m = Number(parsed.massBoxes) || 1;
+      base.boxMassMin = clamp(0.2 * m, 0.05, 12);
+      base.boxMassMax = clamp(1.2 * m, 0.05, 20);
+    }
   } catch (_) {}
+  // keep min <= max
+  if (base.ballMassMin > base.ballMassMax) {
+    const t = base.ballMassMin;
+    base.ballMassMin = base.ballMassMax;
+    base.ballMassMax = t;
+  }
+  if (base.boxMassMin > base.boxMassMax) {
+    const t = base.boxMassMin;
+    base.boxMassMin = base.boxMassMax;
+    base.boxMassMax = t;
+  }
   return base;
 }
 
@@ -132,6 +145,129 @@ function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
 
+function rand(a, b) {
+  return a + Math.random() * (b - a);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function pickMassInRange(minM, maxM, globalScale, prefer) {
+  const lo = Math.min(minM, maxM);
+  const hi = Math.max(minM, maxM);
+  let m;
+  if (prefer != null && Number.isFinite(prefer) && hi > lo) {
+    // bias toward original relative position if we can map it
+    m = lerp(lo, hi, clamp(prefer, 0, 1));
+  } else if (hi <= lo) {
+    m = lo;
+  } else {
+    m = rand(lo, hi);
+  }
+  return Math.max(0.05, m * globalScale);
+}
+
+function cloneObj(o) {
+  return JSON.parse(JSON.stringify(o));
+}
+
+function expandPopulation(objects, t) {
+  const statics = [];
+  const boxes = [];
+  const balls = [];
+  for (const o of objects) {
+    if (o.static) {
+      statics.push(o);
+      continue;
+    }
+    const type = String(o.type || "sphere").toLowerCase();
+    if (type === "box") boxes.push(o);
+    else balls.push(o);
+  }
+
+  const boxTpl =
+    boxes[0] ||
+    {
+      type: "box",
+      static: false,
+      pos: [0, 1.2, 0],
+      size: [0.4, 0.4, 0.4],
+      mass: 0.5,
+      color: [0.72, 0.52, 0.3],
+      restitution: 0.12,
+      friction: 0.55,
+    };
+  const ballTpl =
+    balls[0] ||
+    {
+      type: "sphere",
+      static: false,
+      pos: [-3, 1.5, 0],
+      radius: 0.35,
+      mass: 2,
+      velocity: [6, 1, 0],
+      color: [0.25, 0.4, 0.9],
+      restitution: 0.35,
+      friction: 0.15,
+    };
+
+  const scatter = Math.max(0, Number(t.randomness) || 0);
+  const extras = [];
+
+  const nBox = Math.round(t.extraBoxes || 0);
+  for (let i = 0; i < nBox; i++) {
+    const o = cloneObj(boxTpl);
+    const col = i % 6;
+    const row = Math.floor(i / 6);
+    o.pos = [
+      -1.5 + col * 0.55 + rand(-0.12, 0.12) * scatter,
+      0.35 + row * 0.48 + rand(0, 0.2) * scatter,
+      rand(-1.2, 1.2) * Math.max(0.35, scatter),
+    ];
+    o.pos_jitter = [0.08 * scatter, 0.05 * scatter, 0.08 * scatter];
+    o.color = [
+      clamp(0.55 + Math.random() * 0.3, 0, 1),
+      clamp(0.38 + Math.random() * 0.25, 0, 1),
+      clamp(0.22 + Math.random() * 0.15, 0, 1),
+    ];
+    delete o.velocity;
+    extras.push(o);
+  }
+
+  const nBall = Math.round(t.extraBalls || 0);
+  for (let i = 0; i < nBall; i++) {
+    const o = cloneObj(ballTpl);
+    o.pos = [
+      -5.5 + rand(0, 2.5) * Math.max(0.4, scatter),
+      0.8 + rand(0, 2.5) * Math.max(0.5, scatter),
+      rand(-2.2, 2.2) * Math.max(0.4, scatter),
+    ];
+    o.pos_jitter = [0.15 * scatter, 0.12 * scatter, 0.15 * scatter];
+    const speed = 4 + rand(0, 10) * Math.max(0.3, scatter);
+    o.velocity = [speed * rand(0.6, 1.2), rand(0.5, 3.5), rand(-1.5, 1.5)];
+    o.velocity_jitter = [0.4 * scatter, 0.3 * scatter, 0.35 * scatter];
+    o.color = [
+      clamp(0.15 + Math.random() * 0.7, 0, 1),
+      clamp(0.2 + Math.random() * 0.6, 0, 1),
+      clamp(0.4 + Math.random() * 0.55, 0, 1),
+    ];
+    extras.push(o);
+  }
+
+  return [...statics, ...boxes, ...balls, ...extras];
+}
+
+function applySizeJitter(o, amount) {
+  if (!amount) return;
+  const f = 1 + rand(-amount, amount);
+  if (String(o.type || "").toLowerCase() === "box" && Array.isArray(o.size)) {
+    o.size = o.size.map((s) => Math.max(0.08, Number(s) * f));
+  } else if (o.radius != null) {
+    o.radius = Math.max(0.06, Number(o.radius) * f);
+  }
+}
+
 function applyTweaksToScene(baseScene, tweaks) {
   if (!baseScene) return null;
   const s = JSON.parse(JSON.stringify(baseScene));
@@ -143,13 +279,42 @@ function applyTweaksToScene(baseScene, tweaks) {
     s.gravity = [0, -9.8 * t.gravity, 0];
   }
 
-  for (const o of s.objects || []) {
+  // population first (so new objects get mass/feel too)
+  s.objects = expandPopulation(s.objects || [], t);
+
+  const ballLo = Math.min(t.ballMassMin, t.ballMassMax);
+  const ballHi = Math.max(t.ballMassMin, t.ballMassMax);
+  const boxLo = Math.min(t.boxMassMin, t.boxMassMax);
+  const boxHi = Math.max(t.boxMassMin, t.boxMassMax);
+  const scatter = Math.max(0, Number(t.randomness) || 0);
+
+  // collect mass extents of originals for optional mapping
+  let ballMasses = [];
+  let boxMasses = [];
+  for (const o of s.objects) {
     if (o.static) continue;
     const type = String(o.type || "sphere").toLowerCase();
-    let mass = Number(o.mass != null ? o.mass : 1) * t.massAll;
-    if (type === "sphere") mass *= t.massBalls;
-    if (type === "box") mass *= t.massBoxes;
-    o.mass = Math.max(0.05, mass);
+    const m = Number(o.mass != null ? o.mass : 1);
+    if (type === "box") boxMasses.push(m);
+    else ballMasses.push(m);
+  }
+  const ballM0 = ballMasses.length ? Math.min(...ballMasses) : 1;
+  const ballM1 = ballMasses.length ? Math.max(...ballMasses) : 1;
+  const boxM0 = boxMasses.length ? Math.min(...boxMasses) : 1;
+  const boxM1 = boxMasses.length ? Math.max(...boxMasses) : 1;
+
+  for (const o of s.objects) {
+    if (o.static) continue;
+    const type = String(o.type || "sphere").toLowerCase();
+    const baseMass = Number(o.mass != null ? o.mass : 1);
+
+    if (type === "box") {
+      const u = boxM1 > boxM0 ? (baseMass - boxM0) / (boxM1 - boxM0) : Math.random();
+      o.mass = pickMassInRange(boxLo, boxHi, t.massAll, clamp(u, 0, 1));
+    } else {
+      const u = ballM1 > ballM0 ? (baseMass - ballM0) / (ballM1 - ballM0) : Math.random();
+      o.mass = pickMassInRange(ballLo, ballHi, t.massAll, clamp(u, 0, 1));
+    }
 
     if (o.restitution != null) {
       o.restitution = clamp(Number(o.restitution) * t.bounce, 0, 1);
@@ -161,12 +326,21 @@ function applyTweaksToScene(baseScene, tweaks) {
     } else if (t.friction !== 1) {
       o.friction = clamp(0.4 * t.friction, 0, 3);
     }
-    if (Array.isArray(o.velocity) && t.velocity !== 1) {
+
+    if (Array.isArray(o.velocity)) {
       o.velocity = o.velocity.map((v) => Number(v) * t.velocity);
     }
-    if (Array.isArray(o.velocity_jitter) && t.velocity !== 1) {
-      o.velocity_jitter = o.velocity_jitter.map((v) => Number(v) * t.velocity);
+    // jitter: scene supports pos_jitter / velocity_jitter; scale by randomness
+    if (scatter !== 1 || t.velocity !== 1) {
+      const pj = o.pos_jitter || [0.05, 0.04, 0.05];
+      o.pos_jitter = pj.map((v) => Number(v) * scatter);
+      if (Array.isArray(o.velocity) || o.velocity_jitter) {
+        const vj = o.velocity_jitter || [0.2, 0.15, 0.2];
+        o.velocity_jitter = vj.map((v) => Number(v) * scatter * t.velocity);
+      }
     }
+
+    applySizeJitter(o, t.sizeJitter);
   }
   return s;
 }
@@ -179,6 +353,14 @@ function updateTweakTrack(input) {
   input.style.setProperty("--pct", `${pct}%`);
 }
 
+function updateGroupSummaries() {
+  const t = state.tweaks || TWEAK_DEFAULTS;
+  for (const g of TWEAK_GROUPS) {
+    const el = $(`tweak_group_meta_${g.id}`);
+    if (el) el.textContent = g.summary(t);
+  }
+}
+
 function syncTweakUI() {
   const t = state.tweaks || TWEAK_DEFAULTS;
   for (const d of TWEAK_DEFS) {
@@ -189,6 +371,7 @@ function syncTweakUI() {
     if (valEl) valEl.textContent = d.format(t[d.key]);
     updateTweakTrack(input);
   }
+  updateGroupSummaries();
   const scope = $("tweaksScope");
   if (scope) {
     const key = state.sceneKey || "custom";
@@ -196,7 +379,7 @@ function syncTweakUI() {
       ? key.replace(/^example_/, "")
       : key === "custom"
         ? "this scene"
-        : key.slice(0, 18);
+        : key.slice(0, 16);
     scope.title = `Saved under “${storageKeyFor(key)}”`;
   }
 }
@@ -205,42 +388,101 @@ function buildTweakUI() {
   const grid = $("tweakGrid");
   if (!grid) return;
   grid.innerHTML = "";
-  for (const d of TWEAK_DEFS) {
-    const row = document.createElement("div");
-    row.className = "tweak";
-    row.innerHTML = `
-      <span class="tweak-label">${d.label}</span>
-      <span class="tweak-value" id="tweak_val_${d.key}"></span>
-      <input type="range" id="tweak_${d.key}"
-        min="${d.min}" max="${d.max}" step="${d.step}"
-        aria-label="${d.label}" />
+  for (const g of TWEAK_GROUPS) {
+    const det = document.createElement("details");
+    det.className = "tweak-group";
+    det.open = !!g.open;
+    det.innerHTML = `
+      <summary>
+        <span class="tweak-group-title">${g.title}</span>
+        <span class="tweak-group-meta" id="tweak_group_meta_${g.id}"></span>
+        <span class="chev">▾</span>
+      </summary>
+      <div class="tweak-group-body" id="tweak_group_body_${g.id}"></div>
     `;
-    grid.appendChild(row);
-    const input = row.querySelector("input");
-    input.addEventListener("input", () => onTweakInput(d, input));
+    const body = det.querySelector(".tweak-group-body");
+    for (const d of g.items) {
+      const row = document.createElement("div");
+      row.className = "tweak";
+      row.innerHTML = `
+        <span class="tweak-label">${d.label}</span>
+        <span class="tweak-value" id="tweak_val_${d.key}"></span>
+        <input type="range" id="tweak_${d.key}"
+          min="${d.min}" max="${d.max}" step="${d.step}"
+          aria-label="${d.label}" />
+      `;
+      body.appendChild(row);
+      const input = row.querySelector("input");
+      input.addEventListener("input", () => onTweakInput(d, input));
+    }
+    grid.appendChild(det);
   }
   $("tweaksResetBtn")?.addEventListener("click", () => {
     state.tweaks = { ...TWEAK_DEFAULTS };
     saveTweaks(state.sceneKey, state.tweaks);
     syncTweakUI();
     applyTweaksLive(true);
-    toast("Tweaks reset to defaults");
+    toast("Lab controls reset for this demo");
   });
 }
 
 function onTweakInput(def, input) {
   if (!state.tweaks) state.tweaks = { ...TWEAK_DEFAULTS };
-  const v = clamp(Number(input.value), def.min, def.max);
+  let v = clamp(Number(input.value), def.min, def.max);
+  if (def.int) v = Math.round(v);
   state.tweaks[def.key] = v;
+
+  // keep mass ranges ordered while dragging
+  if (def.key === "ballMassMin" && state.tweaks.ballMassMin > state.tweaks.ballMassMax) {
+    state.tweaks.ballMassMax = state.tweaks.ballMassMin;
+    const other = $("tweak_ballMassMax");
+    if (other) {
+      other.value = String(state.tweaks.ballMassMax);
+      updateTweakTrack(other);
+      const ve = $("tweak_val_ballMassMax");
+      if (ve) ve.textContent = TWEAK_DEFS.find((x) => x.key === "ballMassMax").format(state.tweaks.ballMassMax);
+    }
+  }
+  if (def.key === "ballMassMax" && state.tweaks.ballMassMax < state.tweaks.ballMassMin) {
+    state.tweaks.ballMassMin = state.tweaks.ballMassMax;
+    const other = $("tweak_ballMassMin");
+    if (other) {
+      other.value = String(state.tweaks.ballMassMin);
+      updateTweakTrack(other);
+      const ve = $("tweak_val_ballMassMin");
+      if (ve) ve.textContent = TWEAK_DEFS.find((x) => x.key === "ballMassMin").format(state.tweaks.ballMassMin);
+    }
+  }
+  if (def.key === "boxMassMin" && state.tweaks.boxMassMin > state.tweaks.boxMassMax) {
+    state.tweaks.boxMassMax = state.tweaks.boxMassMin;
+    const other = $("tweak_boxMassMax");
+    if (other) {
+      other.value = String(state.tweaks.boxMassMax);
+      updateTweakTrack(other);
+      const ve = $("tweak_val_boxMassMax");
+      if (ve) ve.textContent = TWEAK_DEFS.find((x) => x.key === "boxMassMax").format(state.tweaks.boxMassMax);
+    }
+  }
+  if (def.key === "boxMassMax" && state.tweaks.boxMassMax < state.tweaks.boxMassMin) {
+    state.tweaks.boxMassMin = state.tweaks.boxMassMax;
+    const other = $("tweak_boxMassMin");
+    if (other) {
+      other.value = String(state.tweaks.boxMassMin);
+      updateTweakTrack(other);
+      const ve = $("tweak_val_boxMassMin");
+      if (ve) ve.textContent = TWEAK_DEFS.find((x) => x.key === "boxMassMin").format(state.tweaks.boxMassMin);
+    }
+  }
+
   const valEl = $(`tweak_val_${def.key}`);
   if (valEl) valEl.textContent = def.format(v);
   updateTweakTrack(input);
+  updateGroupSummaries();
   saveTweaks(state.sceneKey, state.tweaks);
 
   if (def.live) {
     sendCmd("set_speed", { speed: state.tweaks.speed });
   } else {
-    // debounce rebuild so dragging feels smooth
     clearTimeout(state._tweakReloadTimer);
     state._tweakReloadTimer = setTimeout(() => applyTweaksLive(false), 180);
   }
@@ -257,7 +499,8 @@ async function applyTweaksLive(forceRestart) {
   }
   sendCmd("reload_scene", { scene });
   sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
-  $("simStatus").textContent = "Tweaks applied · running";
+  const n = (scene.objects || []).filter((o) => !o.static).length;
+  $("simStatus").textContent = `Tweaks applied · ${n} bodies · running`;
 }
 
 function setBaseScene(scene, sceneKey) {
@@ -768,7 +1011,7 @@ async function boot() {
   syncTweakUI();
 
   addBubble(
-    "Demo auto-starts — no API key needed. Use curriculum chips, or paste an xAI key to invent scenes. Drag the 3D view to orbit. Physics tweaks are saved per demo.",
+    "Demo auto-starts. Lab controls (mass ranges, extra bodies, scatter) are saved per demo and restart the sim when you drag — speed is live. Open Build with Grok when you want AI scenes.",
     "system"
   );
   await refreshStatus();

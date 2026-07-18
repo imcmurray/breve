@@ -33,45 +33,58 @@
 
       <!-- Zone 2: scrollable content -->
       <div class="sidebar-scroll">
-        <section class="panel settings">
-          <label class="field">
-            <span>xAI API key <em>optional — demos work without it</em></span>
-            <input id="apiKey" type="password" placeholder="xai-… or set XAI_API_KEY on server" autocomplete="off" />
-          </label>
-          <p id="keyStatus" class="hint"></p>
-        </section>
-
-        <section class="panel">
+        <section class="panel panel-compact">
           <p class="section-label">Curriculum</p>
-          <div class="chips" id="curriculumChips"></div>
+          <div class="chips chips-dense" id="curriculumChips"></div>
         </section>
 
         <section class="panel tweaks-panel" id="tweaksPanel">
           <div class="tweaks-head">
-            <p class="section-label">Physics tweaks</p>
+            <div class="tweaks-title-block">
+              <p class="section-label">Lab controls</p>
+              <p class="tweaks-sub">Per-demo · restarts on change · speed is live</p>
+            </div>
             <div class="tweaks-head-actions">
               <span class="tweaks-scope" id="tweaksScope" title="Values are saved per demo">per demo</span>
-              <button type="button" id="tweaksResetBtn" class="ghost tiny" title="Restore default tweak values for this demo">Defaults</button>
+              <button type="button" id="tweaksResetBtn" class="ghost tiny" title="Restore defaults for this demo">Defaults</button>
             </div>
           </div>
-          <p class="tweaks-hint">Sliders stick when you re-open the same demo. Mass &amp; gravity re-apply on change; speed is live.</p>
-          <div class="tweak-grid" id="tweakGrid">
+          <div class="tweak-accordion" id="tweakGrid">
             <!-- filled by app.js -->
           </div>
         </section>
 
-        <section class="panel chat-panel">
-          <p class="section-label">Build with Grok</p>
-          <div id="chatLog" class="chat-log" aria-live="polite"></div>
-          <form id="chatForm" class="chat-form">
-            <textarea id="prompt" rows="2" placeholder="Describe a scene… heavy red ball, light yellow balls, show gravity"></textarea>
-            <div class="prompt-chips" id="chips"></div>
-            <div class="row btn-row">
-              <button type="submit" id="sendBtn" class="primary">Build scene</button>
-              <button type="button" id="refineBtn" class="ghost">Refine</button>
-            </div>
-          </form>
-        </section>
+        <details class="panel chat-panel collapsible-panel" id="chatDetails">
+          <summary class="collapsible-summary">
+            <span class="section-label">Build with Grok</span>
+            <span class="chev">▾</span>
+          </summary>
+          <div class="collapsible-body">
+            <div id="chatLog" class="chat-log" aria-live="polite"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="prompt" rows="2" placeholder="Describe a scene… heavy red ball, light yellow balls"></textarea>
+              <div class="prompt-chips" id="chips"></div>
+              <div class="row btn-row">
+                <button type="submit" id="sendBtn" class="primary">Build scene</button>
+                <button type="button" id="refineBtn" class="ghost">Refine</button>
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <details class="panel settings collapsible-panel" id="settingsDetails">
+          <summary class="collapsible-summary">
+            <span class="section-label">Settings</span>
+            <span class="chev">▾</span>
+          </summary>
+          <div class="collapsible-body">
+            <label class="field">
+              <span>xAI API key <em>optional</em></span>
+              <input id="apiKey" type="password" placeholder="xai-… or set XAI_API_KEY on server" autocomplete="off" />
+            </label>
+            <p id="keyStatus" class="hint"></p>
+          </div>
+        </details>
       </div>
 
       <!-- Zone 3: fixed footer controls -->
