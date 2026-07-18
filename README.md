@@ -1,75 +1,121 @@
 # breve
 
-### Talk to a continuous 3D multi-agent world
-
-**Describe a scene in English. Watch gravity, mass, and flocks come alive in the browser.**  
-A modern revival of [Jon Klein’s breve](https://github.com/jonklein/breve) (~2000–2015) — lightweight 3D multi-agent / artificial-life simulation for teaching, demos, and playful science.
-
 <p align="center">
-  <a href="https://github.com/jonklein/breve"><img alt="Forked from jonklein/breve" src="https://img.shields.io/badge/forked%20from-jonklein%2Fbreve-24292f?logo=github" /></a>
-  <img alt="License GPL-2.0" src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" />
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776ab?logo=python&logoColor=white" />
-  <img alt="Status revival" src="https://img.shields.io/badge/status-active%20revival-3ecf8e" />
+  <strong>The difference isn’t another physics library.</strong><br />
+  <strong>It’s a browser you open — and a 3D multi-agent world is already running.</strong>
 </p>
 
 <p align="center">
-  <img src="images/swarm3d.png" alt="3D flocking swarm in breve" width="720" />
+  <a href="#the-web-ui--why-this-repo-is-different"><img alt="Web UI" src="https://img.shields.io/badge/★_product-Web_UI_%2B_live_3D-5b9dff?style=for-the-badge" /></a>
+  <a href="https://github.com/jonklein/breve"><img alt="Forked from jonklein/breve" src="https://img.shields.io/badge/forked%20from-jonklein%2Fbreve-24292f?style=for-the-badge&logo=github" /></a>
 </p>
 
-<p align="center"><em>Classic breve spirit · Python 3 engine · browser UI · optional Grok scene builder</em></p>
+<p align="center">
+  <img alt="License" src="https://img.shields.io/badge/license-GPL--2.0--or--later-blue" />
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776ab?logo=python&logoColor=white" />
+  <img alt="Status" src="https://img.shields.io/badge/status-active%20revival-3ecf8e" />
+</p>
+
+<p align="center">
+  <img src="images/swarm3d.gif" alt="Live 3D multi-agent swarm in breve" width="720" />
+</p>
+
+<p align="center">
+  <em>Type a world in English · or click a curriculum demo · watch continuous 3D agents live</em><br />
+  Modern revival of <a href="https://github.com/jonklein/breve">Jon Klein’s breve</a> (2000–2015)
+</p>
 
 ---
 
-## Why this exists
+## The Web UI — why this repo is different
 
-| You want… | Typical tools | **breve** |
-|-----------|---------------|-----------|
-| Continuous **3D** agents, not grids | NetLogo / Mesa | Native fit |
-| Something **lighter than Unity** | Unity ML-Agents | `pip` + browser |
-| **See gravity & mass** in minutes | Raw physics engines | Curriculum demos + chat |
-| **Describe a world** in plain language | Copy-paste LLM code | Safe JSON scenes + live 3D |
+Most “multi-agent” tools force a choice:
 
-This is **not** a game engine or a robotics stack. It is a **sandbox for continuous 3D multi-agent / ALife thinking** — the gap between NetLogo and Unity.
+| Tool | Reality |
+|------|---------|
+| **NetLogo / Mesa** | Brilliant — mostly **2D / grids** |
+| **Unity / MuJoCo / Isaac** | Powerful — **heavy** install & authoring |
+| **ChatGPT + paste code** | Clever — **no live world**, broken scripts |
+| **Particle Life toys** | Pretty — not *your* scene from language |
 
-> **Original work © Jonathan Klein.** This repository is a community **fork and revival**. See [Credits](#credits--attribution).
+**breve’s product is the opposite friction:**
+
+```text
+  Open a URL
+       → a 3D world is ALREADY moving (no empty canvas)
+       → click Gravity / Stairs / Wrecking ball / Flock
+       → or describe a scene in English (Grok builds safe JSON)
+       → orbit, pause, refine, Share a link
+```
+
+That loop is what makes this revival worth starring — not nostalgia for 2007 C++.
+
+| Web UI capability | Why it matters |
+|-------------------|----------------|
+| **Autoplay on load** | Zero-second “aha” — gravity & mass before you read a doc |
+| **Curriculum chips** | Teaching path without writing code |
+| **Chat → scene** | Natural language composition; model emits **JSON only** (no `exec`) |
+| **Live three.js view** | Drag to orbit, scroll zoom, pause/reset |
+| **Share links** | `/?example=…` or `/?s=…` so demos spread |
+| **Optional API key** | Examples work offline from AI; paste [xAI](https://console.x.ai) key when you want to invent worlds |
+
+> **This is not “yet another boids gist.”**  
+> It’s a **browser-native continuous 3D multi-agent sandbox** with an AI door on the front.
 
 ---
 
-## 60-second start (the product)
+## Try the product in 60 seconds
 
 ```bash
 git clone https://github.com/imcmurray/breve.git
 cd breve
-python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[webai]"
 breve-web
 ```
 
-Open **http://127.0.0.1:8765**
+**→ [http://127.0.0.1:8765](http://127.0.0.1:8765)**
 
-- A **gravity demo auto-plays** (no empty canvas, no API key)
-- Try curriculum chips: **Gravity · Stairs · Wrecking ball · Flock**
-- Optional: paste an [xAI API key](https://console.x.ai) and **describe a new world** in chat
-- **Share** copies a link with the scene encoded (`/?s=…` or `/?example=…`)
+No API key required for demos. Optional:
 
-Deploy: **[DEPLOY.md](DEPLOY.md)** · Docker included.
+```bash
+export XAI_API_KEY=xai-...   # https://console.x.ai
+```
+
+Then in the UI: *“heavy red ball and light yellow balls so I can see gravity”* → **Build scene**.
+
+Deploy for others: **[DEPLOY.md](DEPLOY.md)** (Docker / Fly / Railway).
 
 ---
 
-## What you can do
+## What people actually do in the UI
 
-### Browser (recommended)
+1. **Land** — heavy vs light balls already falling  
+2. **Curriculum** — Stairs · Wrecking ball · Flock (one click)  
+3. **Share** — copy a link; classmate opens the same world  
+4. **Invent** — paste xAI key, describe a scene, refine in chat  
+5. **Learn** — free-fall looks the same; **collisions** reveal mass  
 
-| Feature | What it does |
-|---------|----------------|
-| **Autoplay demos** | Instant visual proof of continuous 3D agents |
-| **Curriculum chips** | Teaching path: mass, stairs, impact, flocking |
-| **Chat → scene** | Grok builds a **safe JSON** scene (never arbitrary `exec`) |
-| **Refine** | “Make gravity stronger”, “add a heavy ball” |
-| **Live 3D** | Orbit, zoom, pause, reset |
-| **Share** | Send a URL; others see the same world |
+That’s the teaching and demo story. The Python engine underneath is how it’s honest and extensible — not the first thing you must learn.
 
-### Python API (classic spirit)
+---
+
+## Architecture (why AI is safe here)
+
+```text
+  English  ──►  Grok (xAI)  ──►  scene JSON  ──►  breve physics / flock
+                                                      │
+                                                      ▼
+                                              browser (three.js)
+```
+
+- No arbitrary model code execution  
+- Schema: `python/breve/scene.py`  
+- Engine steps on the server; browser renders state over WebSocket  
+
+---
+
+## For developers (same spirit as classic breve)
 
 ```python
 import breve
@@ -85,101 +131,35 @@ class Hello(breve.Control):
 Hello().run(steps=5)
 ```
 
-Subclass `Control` / `Mobile`, implement `iterate` and collision handlers — the mental model from original breve.
-
-### Desktop demos
-
 ```bash
 pip install -e ".[dev,viz]"
 pytest -q
 python demos/swarm.py --viz
 python demos/bouncy.py --viz
-python demos/gravity.py --viz
 ```
 
-| Demo | Idea |
-|------|------|
-| `swarm` | Boids / emergence |
-| `bouncy` | Gravity arcs + mass tiers |
-| `gravity` / stairs scene | Mixed weights on structure |
-| `stack` / tower scene | Impact under gravity |
-| `gatherers` | Collision-driven pickup |
-
-More: [`demos/INDEX.md`](demos/INDEX.md)
-
----
-
-## Architecture (safe AI)
-
-```text
-  English prompt  ──►  Grok (xAI)  ──►  scene JSON  ──►  breve engine
-                                              │
-                                              ▼
-                                    browser three.js view
-```
-
-- Model output is **declarative JSON only** (schema in `python/breve/scene.py`)
-- Physics / flocking run in **Python** on the server
-- The browser **renders** streamed state (WebSocket)
-
-CLI alternative: `breve-ai "…" --viz` (see below).
-
----
-
-## Install options
-
-```bash
-# Web + AI scene builder
-pip install -e ".[webai]"
-
-# Local OpenGL demos
-pip install -e ".[viz]"
-
-# AI CLI only
-pip install -e ".[ai]"
-
-# Tests
-pip install -e ".[dev]"
-pytest -q
-```
-
-```bash
-export XAI_API_KEY=xai-...     # https://console.x.ai
-# optional: cp .env.example .env
-breve-web                      # http://127.0.0.1:8765
-breve-ai "flock of cyan birds" --viz
-```
-
----
-
-## Repository layout
-
-```text
-python/breve/     Modern engine, physics, AI, web app
-web UI           →  breve-web  (FastAPI + three.js)
-demos/            Scriptable demos
-scenes/           Curriculum JSON (autoplay / share)
-legacy/           Original C++ / steve / Python 2 tree (museum)
-REVIVAL.md        Roadmap & design decisions
-NOTICE.md         Attribution requirements
-DEPLOY.md         Docker / Fly / Railway notes
-```
+| Layer | Path |
+|-------|------|
+| Web app | `breve-web` → `python/breve/webapp.py` + `web_static/` |
+| Scene JSON | `scenes/` · builder `python/breve/scene.py` |
+| AI | `breve-ai` · `python/breve/ai_llm.py` |
+| Engine | `python/breve/` |
+| Original sources | `legacy/` (museum) |
 
 ---
 
 ## Status
 
-| Area | State |
-|------|--------|
-| Python 3 agent API | yes |
-| Rigid-body physics (spheres / AABBs) | yes |
+| Capability | State |
+|------------|--------|
+| **Web UI (autoplay, curriculum, share, chat)** | **yes — the product** |
+| Python 3 agent API (`Control` / `Mobile`) | yes |
+| Rigid-body physics + mixed masses | yes |
 | Flocking / kinematic agents | yes |
-| Browser UI + autoplay + share | yes |
 | AI scene builder (xAI Grok) | yes |
 | Joints / Walker / Rapier | planned |
-| steve language | legacy only |
 
-Roadmap: **[REVIVAL.md](REVIVAL.md)**
+Roadmap: [`REVIVAL.md`](REVIVAL.md)
 
 ---
 
@@ -187,48 +167,35 @@ Roadmap: **[REVIVAL.md](REVIVAL.md)**
 
 ### Original breve
 
-Created by **[Jonathan Klein](https://github.com/jonklein)** — *the breve simulation environment* for decentralized systems and artificial life in continuous 3D.
+**[Jonathan Klein](https://github.com/jonklein)** created *the breve simulation environment* for decentralized systems and artificial life in continuous 3D.
 
-- Upstream: **[github.com/jonklein/breve](https://github.com/jonklein/breve)**
+- Upstream: **[github.com/jonklein/breve](https://github.com/jonklein/breve)**  
+- This repo is a **public fork** so GitHub lineage stays visible  
 - Historical site: [spiderland.org](http://www.spiderland.org/)
-- This repo is a **GitHub fork** of that work so lineage stays visible
 
 ### Citation
 
-If you use breve in research or teaching, please cite the original work, e.g.:
+> Klein, J. (2002). *BREVE: a 3D environment for the simulation of decentralized systems and artificial life.* Artificial Life VIII.
 
-> Klein, J. (2002). *BREVE: a 3D environment for the simulation of decentralized systems and artificial life.* Proceedings of the Eighth International Conference on Artificial Life (Artificial Life VIII).
-
-Machine-readable: [`CITATION.cff`](CITATION.cff) · human summary: [`NOTICE.md`](NOTICE.md)
+See [`CITATION.cff`](CITATION.cff) and [`NOTICE.md`](NOTICE.md).
 
 ### This revival
 
-Modern engine, packaging, browser product, and AI scene composer by revival contributors. Not an official product of the original author unless they say otherwise.
+Browser product, Python 3 engine, AI scene composer, and packaging by revival contributors. Not an official product of the original author unless they say so.
 
 ---
 
 ## License
 
-**GPL-2.0-or-later** — see [`LICENSE`](LICENSE) and [`GPL.txt`](GPL.txt).
+**GPL-2.0-or-later** — [`LICENSE`](LICENSE), [`GPL.txt`](GPL.txt).
 
 Original breve © Jonathan Klein and contributors.  
-Revival additions © revival contributors (same license family for compatibility).
-
----
-
-## Contributing
-
-Issues and PRs welcome on the revival fork. Prefer:
-
-1. Demo / curriculum polish that teaches a concept in &lt; 30 seconds  
-2. Web UX that shortens time-to-“aha”  
-3. Physics and agent API fidelity to the classic *spirit* without requiring 2007 toolchains  
-
-Keep `legacy/` intact as historical source.
+Revival additions © revival contributors under the same license family.
 
 ---
 
 <p align="center">
-  <strong>Open the web UI. Watch a world start. Then talk one into existence.</strong><br />
-  <code>breve-web</code> → <a href="http://127.0.0.1:8765">http://127.0.0.1:8765</a>
+  <strong>Don’t clone a museum. Open a world.</strong><br /><br />
+  <code>pip install -e ".[webai]" && breve-web</code><br />
+  <a href="http://127.0.0.1:8765"><strong>http://127.0.0.1:8765</strong></a>
 </p>

@@ -3,8 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>breve — AI 3D multi-agent sandbox</title>
-  <meta name="description" content="Describe a 3D multi-agent or gravity world in English. Grok builds it. Watch it live." />
+  <title>breve — talk to a 3D multi-agent world</title>
+  <meta name="description" content="Open a browser: a continuous 3D multi-agent world is already running. Click curriculum demos or describe a scene in English — Grok builds it, you watch it live." />
+  <meta property="og:title" content="breve — continuous 3D multi-agent sandbox" />
+  <meta property="og:description" content="Not another empty sim toolkit. Open the web UI and a world is already moving. Chat optional. Share links." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="stylesheet" href="/static/style.css" />
   <script type="importmap">
   {
@@ -20,12 +24,18 @@
     <aside id="sidebar">
       <header class="brand">
         <h1>breve</h1>
-        <p class="tag">Talk to a world · continuous 3D multi-agent</p>
+        <p class="tag">Continuous 3D multi-agent · in your browser</p>
+        <ul class="value-props">
+          <li><strong>Already running</strong> — no empty canvas on load</li>
+          <li><strong>One-click curriculum</strong> — gravity, mass, impact, flock</li>
+          <li><strong>Talk to build</strong> — optional Grok scene chat</li>
+          <li><strong>Share</strong> — send a link to the same world</li>
+        </ul>
       </header>
 
       <section class="panel settings">
         <label class="field">
-          <span>xAI API key <em>(optional for examples)</em></span>
+          <span>xAI API key <em>(only needed to invent new scenes)</em></span>
           <input id="apiKey" type="password" placeholder="xai-… or set XAI_API_KEY on server" autocomplete="off" />
         </label>
         <p id="keyStatus" class="hint"></p>

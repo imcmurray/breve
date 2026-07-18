@@ -40,19 +40,43 @@ body {
 }
 
 .brand {
-  padding: 1.1rem 1.25rem 0.75rem;
+  padding: 1.1rem 1.25rem 0.9rem;
   border-bottom: 1px solid var(--border);
+  background: linear-gradient(165deg, #121c2e 0%, #0b0f16 70%);
 }
 .brand h1 {
   margin: 0;
-  font-size: 1.45rem;
+  font-size: 1.5rem;
   letter-spacing: 0.04em;
   font-weight: 700;
+  background: linear-gradient(90deg, #e8eef8, #8eb6ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .brand .tag {
-  margin: 0.25rem 0 0;
+  margin: 0.3rem 0 0;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.value-props {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.value-props li {
+  font-size: 0.78rem;
   color: var(--muted);
-  font-size: 0.8rem;
+  line-height: 1.35;
+  padding-left: 0.1rem;
+}
+.value-props strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .panel {

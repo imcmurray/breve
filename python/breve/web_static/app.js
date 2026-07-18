@@ -482,7 +482,12 @@ $("resetBtn").addEventListener("click", () => {
 
 async function boot() {
   addBubble(
-    "Welcome. A live demo starts automatically — no API key needed. Drag the 3D view. Use curriculum chips, or paste an xAI key and describe a new world.",
+    "This is the product: a live continuous 3D multi-agent world in your browser.\n\n" +
+      "• Demo auto-starts (no API key)\n" +
+      "• Curriculum chips teach gravity, mass, impact, flocking\n" +
+      "• Paste an xAI key only when you want to invent scenes in English\n" +
+      "• Share copies a link to this world\n\n" +
+      "Drag the 3D view to orbit. That’s the whole point of this revival.",
     "system"
   );
   await refreshStatus();
