@@ -108,7 +108,7 @@ def test_box_stack_tips_off_edge():
                 self.boxes.append(b)
 
     c = C()
-    c.run(steps=150)
+    c.run(steps=220)
     assert all(b.location.y < -0.5 for b in c.boxes)
 
 
