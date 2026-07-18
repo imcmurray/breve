@@ -1,24 +1,28 @@
 cff-version: 1.2.0
-title: "breve — 3D multi-agent / artificial-life simulation environment (revival)"
-message: "If you use this software, please cite the original breve paper and this software."
+title: "breve — continuous 3D multi-agent / artificial-life simulation (revival)"
+message: >-
+  If you use this software, please cite the original breve paper by Jonathan
+  Klein and mention this revival build.
 type: software
 authors:
   - family-names: Klein
     given-names: Jonathan
-    email: jk@spiderland.org
   - name: "Breve revival contributors"
 license: GPL-2.0-or-later
-repository-code: "https://github.com/jonklein/breve"
+repository-code: "https://github.com/imcmurray/breve"
+url: "https://github.com/imcmurray/breve"
 abstract: >-
   breve is a simulation environment for decentralized systems and artificial
-  life in continuous 3D worlds. This repository includes a modern Python 3
-  revival of the agent API alongside the classic C++ sources.
+  life in continuous 3D worlds. This repository is a modern revival (Python 3
+  engine, browser UI, optional AI scene builder) forked from the original
+  open-source project by Jonathan Klein.
 keywords:
   - multi-agent
   - artificial-life
   - simulation
   - emergent-behavior
   - 3d
+  - agent-based-modeling
 references:
   - type: conference-paper
     title: "BREVE: a 3D environment for the simulation of decentralized systems and artificial life"
