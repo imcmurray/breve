@@ -8,13 +8,266 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  scene: null,
+  scene: null, // last scene sent to the server (with tweaks applied)
+  baseScene: null, // original un-tweaked scene (for re-applying sliders)
+  sceneKey: null, // example id or custom key — localStorage scope
   sessionId: null,
   ws: null,
   meshes: new Map(),
   paused: false,
   shareToken: null,
+  tweaks: null,
+  _tweakReloadTimer: null,
 };
+
+// ---------------------------------------------------------------------------
+// Physics tweaks — pretty sliders, per-demo localStorage survival
+// ---------------------------------------------------------------------------
+
+const TWEAK_DEFAULTS = {
+  speed: 1,
+  gravity: 1,
+  massAll: 1,
+  massBalls: 1,
+  massBoxes: 1,
+  bounce: 1,
+  friction: 1,
+  velocity: 1,
+};
+
+const TWEAK_DEFS = [
+  {
+    key: "speed",
+    label: "Sim speed",
+    min: 0.25,
+    max: 3,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+    live: true, // no scene rebuild
+  },
+  {
+    key: "gravity",
+    label: "Gravity",
+    min: 0.1,
+    max: 3,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "massAll",
+    label: "All dynamic mass",
+    min: 0.15,
+    max: 5,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "massBalls",
+    label: "Balls mass",
+    min: 0.15,
+    max: 8,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "massBoxes",
+    label: "Boxes mass",
+    min: 0.15,
+    max: 5,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "bounce",
+    label: "Bounce",
+    min: 0,
+    max: 2,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "friction",
+    label: "Friction",
+    min: 0,
+    max: 2.5,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+  {
+    key: "velocity",
+    label: "Launch velocity",
+    min: 0,
+    max: 3,
+    step: 0.05,
+    format: (v) => `${v.toFixed(2)}×`,
+  },
+];
+
+function storageKeyFor(sceneKey) {
+  return `breve_tweaks_v1:${sceneKey || "custom"}`;
+}
+
+function loadTweaks(sceneKey) {
+  const base = { ...TWEAK_DEFAULTS };
+  try {
+    const raw = localStorage.getItem(storageKeyFor(sceneKey));
+    if (!raw) return base;
+    const parsed = JSON.parse(raw);
+    for (const d of TWEAK_DEFS) {
+      if (typeof parsed[d.key] === "number" && Number.isFinite(parsed[d.key])) {
+        base[d.key] = clamp(parsed[d.key], d.min, d.max);
+      }
+    }
+  } catch (_) {}
+  return base;
+}
+
+function saveTweaks(sceneKey, tweaks) {
+  try {
+    localStorage.setItem(storageKeyFor(sceneKey), JSON.stringify(tweaks));
+  } catch (_) {}
+}
+
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+function applyTweaksToScene(baseScene, tweaks) {
+  if (!baseScene) return null;
+  const s = JSON.parse(JSON.stringify(baseScene));
+  const t = tweaks || TWEAK_DEFAULTS;
+
+  if (Array.isArray(s.gravity) && s.gravity.length >= 2) {
+    s.gravity = s.gravity.map((g) => Number(g) * t.gravity);
+  } else if (t.gravity !== 1) {
+    s.gravity = [0, -9.8 * t.gravity, 0];
+  }
+
+  for (const o of s.objects || []) {
+    if (o.static) continue;
+    const type = String(o.type || "sphere").toLowerCase();
+    let mass = Number(o.mass != null ? o.mass : 1) * t.massAll;
+    if (type === "sphere") mass *= t.massBalls;
+    if (type === "box") mass *= t.massBoxes;
+    o.mass = Math.max(0.05, mass);
+
+    if (o.restitution != null) {
+      o.restitution = clamp(Number(o.restitution) * t.bounce, 0, 1);
+    } else if (t.bounce !== 1) {
+      o.restitution = clamp(0.45 * t.bounce, 0, 1);
+    }
+    if (o.friction != null) {
+      o.friction = clamp(Number(o.friction) * t.friction, 0, 3);
+    } else if (t.friction !== 1) {
+      o.friction = clamp(0.4 * t.friction, 0, 3);
+    }
+    if (Array.isArray(o.velocity) && t.velocity !== 1) {
+      o.velocity = o.velocity.map((v) => Number(v) * t.velocity);
+    }
+    if (Array.isArray(o.velocity_jitter) && t.velocity !== 1) {
+      o.velocity_jitter = o.velocity_jitter.map((v) => Number(v) * t.velocity);
+    }
+  }
+  return s;
+}
+
+function updateTweakTrack(input) {
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const val = Number(input.value);
+  const pct = ((val - min) / (max - min)) * 100;
+  input.style.setProperty("--pct", `${pct}%`);
+}
+
+function syncTweakUI() {
+  const t = state.tweaks || TWEAK_DEFAULTS;
+  for (const d of TWEAK_DEFS) {
+    const input = $(`tweak_${d.key}`);
+    const valEl = $(`tweak_val_${d.key}`);
+    if (!input) continue;
+    input.value = String(t[d.key]);
+    if (valEl) valEl.textContent = d.format(t[d.key]);
+    updateTweakTrack(input);
+  }
+  const scope = $("tweaksScope");
+  if (scope) {
+    const key = state.sceneKey || "custom";
+    scope.textContent = key.startsWith("example_")
+      ? key.replace(/^example_/, "")
+      : key === "custom"
+        ? "this scene"
+        : key.slice(0, 18);
+    scope.title = `Saved under “${storageKeyFor(key)}”`;
+  }
+}
+
+function buildTweakUI() {
+  const grid = $("tweakGrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  for (const d of TWEAK_DEFS) {
+    const row = document.createElement("div");
+    row.className = "tweak";
+    row.innerHTML = `
+      <span class="tweak-label">${d.label}</span>
+      <span class="tweak-value" id="tweak_val_${d.key}"></span>
+      <input type="range" id="tweak_${d.key}"
+        min="${d.min}" max="${d.max}" step="${d.step}"
+        aria-label="${d.label}" />
+    `;
+    grid.appendChild(row);
+    const input = row.querySelector("input");
+    input.addEventListener("input", () => onTweakInput(d, input));
+  }
+  $("tweaksResetBtn")?.addEventListener("click", () => {
+    state.tweaks = { ...TWEAK_DEFAULTS };
+    saveTweaks(state.sceneKey, state.tweaks);
+    syncTweakUI();
+    applyTweaksLive(true);
+    toast("Tweaks reset to defaults");
+  });
+}
+
+function onTweakInput(def, input) {
+  if (!state.tweaks) state.tweaks = { ...TWEAK_DEFAULTS };
+  const v = clamp(Number(input.value), def.min, def.max);
+  state.tweaks[def.key] = v;
+  const valEl = $(`tweak_val_${def.key}`);
+  if (valEl) valEl.textContent = def.format(v);
+  updateTweakTrack(input);
+  saveTweaks(state.sceneKey, state.tweaks);
+
+  if (def.live) {
+    sendCmd("set_speed", { speed: state.tweaks.speed });
+  } else {
+    // debounce rebuild so dragging feels smooth
+    clearTimeout(state._tweakReloadTimer);
+    state._tweakReloadTimer = setTimeout(() => applyTweaksLive(false), 180);
+  }
+}
+
+async function applyTweaksLive(forceRestart) {
+  if (!state.baseScene) return;
+  const scene = applyTweaksToScene(state.baseScene, state.tweaks);
+  state.scene = scene;
+  if (!state.sessionId || !state.ws || state.ws.readyState !== WebSocket.OPEN || forceRestart) {
+    await startSession(scene);
+    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+    return;
+  }
+  sendCmd("reload_scene", { scene });
+  sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+  $("simStatus").textContent = "Tweaks applied · running";
+}
+
+function setBaseScene(scene, sceneKey) {
+  state.baseScene = JSON.parse(JSON.stringify(scene));
+  state.sceneKey = sceneKey || "custom";
+  state.tweaks = loadTweaks(state.sceneKey);
+  syncTweakUI();
+  state.scene = applyTweaksToScene(state.baseScene, state.tweaks);
+  return state.scene;
+}
 
 const AI_PROMPTS = [
   "Heavy red bowling ball and light yellow ping-pong balls bouncing on a floor so I can see gravity and mass",
@@ -283,8 +536,9 @@ async function loadExampleById(id, fromChip = false) {
     const r = await fetch(`/api/examples/${encodeURIComponent(id)}`);
     if (!r.ok) throw new Error("Example not found");
     const scene = await r.json();
-    state.scene = scene;
     state.shareToken = null;
+    // base scene + restore this demo’s saved sliders (survive re-click)
+    const tuned = setBaseScene(scene, id);
     markCurriculumActive(id);
     if (fromChip) {
       addBubble(`Curriculum: ${scene.title || id}`, "system");
@@ -296,7 +550,8 @@ async function loadExampleById(id, fromChip = false) {
     url.searchParams.set("example", id);
     history.replaceState({}, "", url);
     $("simStatus").textContent = `Demo “${scene.title || id}” — running`;
-    await startSession(scene);
+    await startSession(tuned);
+    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
   } catch (e) {
     addBubble(String(e), "system");
     toast(String(e), true);
@@ -371,15 +626,18 @@ async function buildFromPrompt(message, refine) {
       toast(detail || "AI request failed", true);
       return;
     }
-    state.scene = j.scene;
     state.shareToken = j.share_token || null;
+    // Chat scenes share one “custom” tweak slot (or per share token)
+    const key = j.share_token ? `share_${j.share_token.slice(0, 12)}` : "custom";
+    const tuned = setBaseScene(j.scene, key);
     markCurriculumActive("");
     addBubble(j.explanation || "Scene ready.", "assistant");
     if (j.share_token) {
       history.replaceState({}, "", `/?s=${j.share_token}`);
     }
     $("simStatus").textContent = `“${j.title || "untitled"}” — running`;
-    await startSession(state.scene);
+    await startSession(tuned);
+    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
   } catch (e) {
     addBubble(String(e), "system");
     toast(String(e), true);
@@ -460,9 +718,9 @@ function connectWs(sessionId) {
   };
 }
 
-function sendCmd(cmd) {
+function sendCmd(cmd, extra = {}) {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ cmd }));
+    state.ws.send(JSON.stringify({ cmd, ...extra }));
   }
 }
 
@@ -471,10 +729,16 @@ $("playBtn").addEventListener("click", async () => {
     addBubble("Build or load a scene first.", "system");
     return;
   }
-  if (!state.sessionId) await startSession(state.scene);
-  else {
+  if (!state.sessionId) {
+    if (state.baseScene) {
+      state.scene = applyTweaksToScene(state.baseScene, state.tweaks);
+    }
+    await startSession(state.scene);
+    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+  } else {
     state.paused = false;
     sendCmd("resume");
+    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
     $("simStatus").textContent = "Running";
   }
 });
@@ -484,7 +748,14 @@ $("pauseBtn").addEventListener("click", () => {
   $("simStatus").textContent = "Paused";
 });
 $("resetBtn").addEventListener("click", () => {
-  sendCmd("reset");
+  // Re-apply current tweaks so Reset keeps mass/gravity/velocity settings
+  if (state.baseScene) {
+    state.scene = applyTweaksToScene(state.baseScene, state.tweaks);
+    sendCmd("reset", { scene: state.scene });
+  } else {
+    sendCmd("reset");
+  }
+  sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
   state.paused = false;
   $("simStatus").textContent = "Reset";
 });
@@ -492,8 +763,12 @@ $("resetBtn").addEventListener("click", () => {
 // --- boot: URL params → autoplay --------------------------------------------
 
 async function boot() {
+  buildTweakUI();
+  state.tweaks = loadTweaks("example_gravity");
+  syncTweakUI();
+
   addBubble(
-    "Demo auto-starts — no API key needed. Use curriculum chips, or paste an xAI key to invent scenes. Drag the 3D view to orbit.",
+    "Demo auto-starts — no API key needed. Use curriculum chips, or paste an xAI key to invent scenes. Drag the 3D view to orbit. Physics tweaks are saved per demo.",
     "system"
   );
   await refreshStatus();
@@ -510,12 +785,13 @@ async function boot() {
       const r = await fetch(`/api/share/${encodeURIComponent(shareToken)}`);
       const scene = await r.json();
       if (!r.ok) throw new Error(scene.detail || "Bad share link");
-      state.scene = scene;
       state.shareToken = shareToken;
+      const tuned = setBaseScene(scene, `share_${shareToken.slice(0, 12)}`);
       addBubble(`Opened shared scene “${scene.title || "untitled"}”`, "system");
       if (scene.notes) addBubble(scene.notes, "assistant");
       $("simStatus").textContent = "Shared scene — running";
-      await startSession(scene);
+      await startSession(tuned);
+      sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
     } else if (exampleId) {
       await loadExampleById(exampleId, true);
     } else {

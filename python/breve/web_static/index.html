@@ -46,6 +46,20 @@
           <div class="chips" id="curriculumChips"></div>
         </section>
 
+        <section class="panel tweaks-panel" id="tweaksPanel">
+          <div class="tweaks-head">
+            <p class="section-label">Physics tweaks</p>
+            <div class="tweaks-head-actions">
+              <span class="tweaks-scope" id="tweaksScope" title="Values are saved per demo">per demo</span>
+              <button type="button" id="tweaksResetBtn" class="ghost tiny" title="Restore default tweak values for this demo">Defaults</button>
+            </div>
+          </div>
+          <p class="tweaks-hint">Sliders stick when you re-open the same demo. Mass &amp; gravity re-apply on change; speed is live.</p>
+          <div class="tweak-grid" id="tweakGrid">
+            <!-- filled by app.js -->
+          </div>
+        </section>
+
         <section class="panel chat-panel">
           <p class="section-label">Build with Grok</p>
           <div id="chatLog" class="chat-log" aria-live="polite"></div>

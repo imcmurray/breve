@@ -273,7 +273,12 @@ def create_session(req: RunRequest) -> Dict[str, Any]:
     sid = req.session_id or uuid.uuid4().hex[:12]
     # tear down old
     _sessions.pop(sid, None)
-    _sessions[sid] = {"sim": sim, "paused": False, "scene": req.scene}
+    _sessions[sid] = {
+        "sim": sim,
+        "paused": False,
+        "scene": req.scene,
+        "speed": 1.0,
+    }
     snap = snapshot_state(sim)
     return {"session_id": sid, "state": snap}
 
@@ -309,8 +314,27 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                 elif cmd == "resume":
                     sess["paused"] = False
                 elif cmd == "reset":
+                    # optional scene payload when client re-applies tweaks
+                    if isinstance(data.get("scene"), dict):
+                        sess["scene"] = data["scene"]
                     sim = build_scene(sess["scene"])
                     sess["sim"] = sim
+                    await websocket.send_json(
+                        {"type": "state", "state": snapshot_state(sim)}
+                    )
+                elif cmd == "set_speed":
+                    try:
+                        sp = float(data.get("speed", 1.0))
+                    except (TypeError, ValueError):
+                        sp = 1.0
+                    sess["speed"] = max(0.1, min(4.0, sp))
+                elif cmd == "reload_scene":
+                    # live mass/gravity tweaks: rebuild world, keep session id
+                    if isinstance(data.get("scene"), dict):
+                        sess["scene"] = data["scene"]
+                    sim = build_scene(sess["scene"])
+                    sess["sim"] = sim
+                    sess["paused"] = False
                     await websocket.send_json(
                         {"type": "state", "state": snapshot_state(sim)}
                     )
@@ -323,8 +347,21 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                 pass
 
             if not sess.get("paused", False):
-                # catch-up a couple of engine steps per frame for snappier physics
-                for _ in range(2):
+                # base 2 engine steps/tick; speed multiplies (0.25x … 4x)
+                speed = float(sess.get("speed", 1.0) or 1.0)
+                n_steps = max(1, int(round(2 * speed)))
+                # fractional slow-mo: skip some ticks
+                if speed < 0.5:
+                    # accumulate fractional steps
+                    acc = float(sess.get("_speed_acc", 0.0)) + 2.0 * speed
+                    n_steps = int(acc)
+                    sess["_speed_acc"] = acc - n_steps
+                    if n_steps < 1:
+                        await websocket.send_json(
+                            {"type": "state", "state": snapshot_state(sim)}
+                        )
+                        continue
+                for _ in range(n_steps):
                     sim.engine.step()
                 await websocket.send_json(
                     {"type": "state", "state": snapshot_state(sim)}

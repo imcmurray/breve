@@ -299,6 +299,138 @@ select:focus {
   min-width: 0;
 }
 
+/* ========== Physics tweaks ========== */
+.tweaks-panel {
+  background: linear-gradient(180deg, #121a28 0%, #0e1520 100%);
+}
+.tweaks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+.tweaks-head .section-label { margin: 0; }
+.tweaks-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tweaks-scope {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  background: rgba(91, 157, 255, 0.1);
+  border: 1px solid rgba(91, 157, 255, 0.28);
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  font-weight: 600;
+}
+.tweaks-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.tweak-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.tweak {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 0.15rem 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.tweak:hover {
+  border-color: rgba(91, 157, 255, 0.25);
+  background: rgba(91, 157, 255, 0.04);
+}
+.tweak-label {
+  font-size: 0.76rem;
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.tweak-value {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 3.2rem;
+  text-align: right;
+  tabular-nums: true;
+  font-variant-numeric: tabular-nums;
+}
+.tweak input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 1.1rem;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.tweak input[type="range"]:focus {
+  outline: none;
+}
+.tweak input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(91, 157, 255, 0.35);
+}
+.tweak input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    #1e2a3d 0%,
+    #3d5a8a var(--pct, 50%),
+    #1e2a3d var(--pct, 50%)
+  );
+}
+.tweak input[type="range"]::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: #1e2a3d;
+}
+.tweak input[type="range"]::-moz-range-progress {
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3d7aef, #5b9dff);
+}
+.tweak input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #8eb6ff, #5b9dff);
+  border: 2px solid #0c111a;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+.tweak input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #8eb6ff, #5b9dff);
+  border: 2px solid #0c111a;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+button.tiny {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.68rem;
+  border-radius: 6px;
+}
+
 button {
   border: none;
   border-radius: 8px;
