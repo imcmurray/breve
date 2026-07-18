@@ -192,20 +192,27 @@ $("apiKey").addEventListener("change", () => {
   refreshStatus();
 });
 
-// AI prompt chips
+// Compact AI prompt suggestions (under the compose box)
 const chips = $("chips");
-for (const s of AI_PROMPTS) {
+const SHORT_LABELS = [
+  "Heavy + light balls",
+  "Mixed-mass stairs",
+  "Cyan flock",
+  "Wrecking ball",
+  "Ramp race",
+];
+AI_PROMPTS.forEach((s, i) => {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "chip";
-  b.textContent = s.length > 42 ? s.slice(0, 40) + "…" : s;
+  b.textContent = SHORT_LABELS[i] || s.slice(0, 28);
   b.title = s;
   b.addEventListener("click", () => {
     $("prompt").value = s;
     $("prompt").focus();
   });
   chips.appendChild(b);
-}
+});
 
 async function refreshStatus() {
   try {
