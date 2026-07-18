@@ -255,14 +255,18 @@ class PhysicsWorld:
         self.bodies: List[RigidBody] = []
         self._by_owner: dict = {}
         self.iterations: int = 8
-        self.slop: float = 0.004
-        self.baumgarte: float = 0.2
-        self.linear_damping: float = 0.015
-        self.angular_damping: float = 0.05
-        self.bounce_threshold: float = 0.5
+        # Allow a little overlap without velocity bias (kills rest hop).
+        self.slop: float = 0.008
+        self.baumgarte: float = 0.12
+        # Cap Baumgarte separation goal (m/s) — uncapped bias causes perpetual bounce.
+        self.max_bias: float = 0.15
+        self.linear_damping: float = 0.02
+        self.angular_damping: float = 0.06
+        # Below this approach speed, contacts are "resting" (no restitution).
+        self.bounce_threshold: float = 0.8
         self.enabled: bool = True
-        # frames of near-zero energy while in contact before full sleep
-        self.sleep_frames_needed: int = 6
+        # frames of near-zero energy while in contact before full rest zero
+        self.sleep_frames_needed: int = 4
 
     def set_gravity(self, x: float, y: float, z: float) -> None:
         self.gravity = np.array([float(x), float(y), float(z)], dtype=np.float64)
@@ -427,10 +431,15 @@ class PhysicsWorld:
         for _ in range(self.iterations):
             for c in contacts:
                 _resolve_contact(
-                    c, self.slop, self.baumgarte, self.bounce_threshold, dt
+                    c,
+                    self.slop,
+                    self.baumgarte,
+                    self.bounce_threshold,
+                    dt,
+                    self.max_bias,
                 )
 
-        # Contact damping + deferred sleep. Free-fall is never damped (not in set).
+        # Contact damping + rest zero. Free-fall (not in contact) is never damped.
         in_contact: set = set()
         for c in contacts:
             in_contact.add(id(c.a))
@@ -443,13 +452,13 @@ class PhysicsWorld:
                 continue
             speed = float(np.linalg.norm(body.velocity))
             spin = float(np.linalg.norm(body.angular_velocity))
-            # Soft dissipation only when nearly settled — leave tipping free.
-            if speed < 0.28 and spin < 0.55:
-                body.velocity *= 0.88
-                body.angular_velocity *= 0.82
+            # Soft dissipation when nearly settled — leave energetic tip/fall free.
+            if speed < 0.35 and spin < 0.8:
+                body.velocity *= 0.85
+                body.angular_velocity *= 0.78
                 speed = float(np.linalg.norm(body.velocity))
                 spin = float(np.linalg.norm(body.angular_velocity))
-            if speed < 0.10 and spin < 0.22:
+            if speed < 0.12 and spin < 0.25:
                 body._sleep_frames += 1
                 if body._sleep_frames >= self.sleep_frames_needed:
                     body.velocity[:] = 0.0
@@ -773,6 +782,7 @@ def _resolve_contact(
     baumgarte: float,
     bounce_threshold: float,
     dt: float = 1.0 / 60.0,
+    max_bias: float = 0.15,
 ) -> None:
     a, b = c.a, c.b
     n = c.normal
@@ -804,23 +814,29 @@ def _resolve_contact(
     if denom <= 1e-12:
         return
 
-    # Baumgarte bias: push out of penetration as a velocity goal
-    # (scaled down for multi-point manifolds)
     pen = max(c.penetration - slop, 0.0)
     mscale = float(getattr(c, "manifold_scale", 1.0))
-    bias = (baumgarte * mscale * pen / max(dt, 1e-4)) if pen > 0 else 0.0
-
-    # Resting: no bounce when impact is soft
     impact = max(0.0, -vel_n)
-    e_eff = e if impact > bounce_threshold else 0.0
+    resting = impact < bounce_threshold
 
-    # Remove relative normal velocity + bias (works for resting and impact)
-    j = (-(vel_n + bias) - e_eff * min(vel_n, 0.0)) / denom
-    # only apply if it separates (prevents sticky pull when already separating hard)
-    if j < 0:
-        # allowing small negative for bias-only cases: recompute
-        j = -(vel_n + bias) / denom
-    j = float(np.clip(j, 0.0, 50.0))  # repulsive only
+    # Resting contacts: kill approach velocity only — no restitution, no
+    # Baumgarte velocity goal. Uncapped bias was the rest-hop source.
+    if resting:
+        e_eff = 0.0
+        bias = 0.0
+        # If already separating, do not pull back together.
+        j = max(0.0, -vel_n / denom) if vel_n < 0.0 else 0.0
+    else:
+        e_eff = e
+        raw_bias = (
+            (baumgarte * mscale * pen / max(dt, 1e-4)) if pen > 0 else 0.0
+        )
+        bias = min(raw_bias, max_bias)
+        # Standard bounce: post normal rel-vel ≈ -e * pre, plus capped bias.
+        j = (-(1.0 + e_eff) * min(vel_n, 0.0) - bias) / denom
+        j = max(0.0, j)
+
+    j = float(np.clip(j, 0.0, 50.0))
     if j > 0:
         impulse = n * j
         a.apply_impulse_at(impulse, p)
@@ -843,22 +859,22 @@ def _resolve_contact(
         if denom_t > 1e-12:
             jt = -float(np.dot(rv, t_hat)) / denom_t
             mu = (a.friction + b.friction) * 0.5
-            # static friction boost when nearly resting
-            if impact < bounce_threshold:
-                mu = max(mu * 1.35, 0.75)
-            # floor-like contacts: allow a minimum friction impulse even when
-            # normal j is tiny (otherwise residual spin never dies)
-            j_cap = max(j * mu, 0.15 * mu) if impact < bounce_threshold else j * mu
+            if resting:
+                mu = max(mu * 1.4, 0.7)
+                # Allow enough friction to kill residual slide/spin at rest
+                # without a huge free impulse that re-energizes the contact.
+                j_cap = max(j * mu, 0.08 * mu if j < 1e-6 else j * mu)
+            else:
+                j_cap = j * mu
             jt = float(np.clip(jt, -j_cap, j_cap))
             a.apply_impulse_at(t_hat * jt, p)
             b.apply_impulse_at(-t_hat * jt, p)
 
-    # Positional correction — scaled by manifold size so 4-foot contacts
-    # don't blast the body out of the floor and re-inject energy.
-    if pen > slop * 2:
+    # Gentle positional correction only for deep penetration (not rest hop).
+    if pen > slop:
         inv = a.inv_mass + b.inv_mass
         if inv > 1e-12:
-            strength = 0.4 * float(getattr(c, "manifold_scale", 1.0))
+            strength = (0.15 if resting else 0.25) * mscale
             correction = n * (strength * pen / inv)
             if not a.static:
                 a.position = a.position + correction * a.inv_mass
