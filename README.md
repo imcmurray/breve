@@ -56,6 +56,7 @@ That loop is what makes this revival worth starring — not nostalgia for 2007 C
 | **10 curriculum demos** | Teaching path without writing code |
 | **Chat → scene** | Natural language composition; model emits **JSON only** (no `exec`) |
 | **Live three.js view** | Drag to orbit, scroll zoom, pause/reset |
+| **Lab controls** | Per-demo mass ranges, extra bodies, speed, auto-pause — saved in the browser |
 | **Share links** | `/?example=…` or `/?s=…` so demos spread |
 | **Optional API key** | Examples work offline from AI; paste [xAI](https://console.x.ai) key when you want to invent worlds |
 
@@ -70,7 +71,7 @@ That loop is what makes this revival worth starring — not nostalgia for 2007 C
 | 5 | **Ramp race** | Light vs heavy on parallel ramps |
 | 6 | **Bounce arena** | Enclosed room keeps bounces alive |
 | 7 | **Mass volley** | Light swarm meets one heavy ball |
-| 8 | **Funnel** | Drop into a V of walls |
+| 8 | **Funnel** | Multi-layer cascade with transparent walls |
 | 9 | **Flock** | Local rules → 3D swarming |
 | 10 | **Wander** | Decentralized agents roaming space |
 
