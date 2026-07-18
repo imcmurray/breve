@@ -536,6 +536,7 @@ async function applyTweaksLive(forceRestart) {
   if (!state.sessionId || !state.ws || state.ws.readyState !== WebSocket.OPEN || forceRestart) {
     await startSession(scene);
     sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
+    sendHousekeeping();
     return;
   }
   sendCmd("reload_scene", { scene });
