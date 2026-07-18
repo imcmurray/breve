@@ -19,6 +19,9 @@ const state = {
   tweaks: null,
   _tweakReloadTimer: null,
   _cmdQueue: [],
+  // User-orbit camera: remember per demo across reset / re-run
+  cameraUserSet: false,
+  _cameraSaveTimer: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -567,11 +570,17 @@ async function applyTweaksLive(forceRestart) {
 }
 
 function setBaseScene(scene, sceneKey) {
+  // Save orbit for the previous demo before switching keys
+  if (state.cameraUserSet && state.sceneKey) {
+    saveCameraPose(state.sceneKey, captureCameraPose());
+  }
   state.baseScene = JSON.parse(JSON.stringify(scene));
   state.sceneKey = sceneKey || "custom";
   state.tweaks = loadTweaks(state.sceneKey);
   syncTweakUI();
   state.scene = applyTweaksToScene(state.baseScene, state.tweaks);
+  // Will restore saved camera in frameCamera on next startSession
+  state.cameraUserSet = !!loadCameraPose(state.sceneKey);
   return state.scene;
 }
 
@@ -606,6 +615,14 @@ camera.position.set(10, 6, 12);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.target.set(0, 1, 0);
+// Persist orbit angle across runs of the same demo
+controls.addEventListener("end", () => {
+  state.cameraUserSet = true;
+  scheduleSaveCamera();
+});
+controls.addEventListener("start", () => {
+  state.cameraUserSet = true;
+});
 
 scene3.add(new THREE.HemisphereLight(0xb0c4ff, 0x223311, 1.1));
 const dir = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -715,7 +732,8 @@ function applyState(simState) {
     const b = simState.background;
     scene3.background = new THREE.Color(b[0] * 0.35, b[1] * 0.35, b[2] * 0.4 + 0.05);
   }
-  if (simState.camera?.target) {
+  // Don't fight the user: only ease target when they haven't set a custom orbit
+  if (!state.cameraUserSet && simState.camera?.target) {
     const t = simState.camera.target;
     controls.target.lerp(new THREE.Vector3(t[0], t[1], t[2]), 0.08);
   }
@@ -723,12 +741,76 @@ function applyState(simState) {
   $("hudTime").textContent = `t=${(simState.time || 0).toFixed(1)}s · n=${(simState.objects || []).length}`;
 }
 
-function frameCamera(simState) {
+function cameraStorageKey(sceneKey) {
+  return `breve_camera_v1:${sceneKey || "custom"}`;
+}
+
+function captureCameraPose() {
+  return {
+    pos: [camera.position.x, camera.position.y, camera.position.z],
+    target: [controls.target.x, controls.target.y, controls.target.z],
+  };
+}
+
+function scheduleSaveCamera() {
+  clearTimeout(state._cameraSaveTimer);
+  state._cameraSaveTimer = setTimeout(() => {
+    saveCameraPose(state.sceneKey, captureCameraPose());
+  }, 120);
+}
+
+function saveCameraPose(sceneKey, pose) {
+  if (!pose?.pos || !pose?.target) return;
+  try {
+    localStorage.setItem(cameraStorageKey(sceneKey), JSON.stringify(pose));
+  } catch (_) {}
+}
+
+function loadCameraPose(sceneKey) {
+  try {
+    const raw = localStorage.getItem(cameraStorageKey(sceneKey));
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (
+      !p ||
+      !Array.isArray(p.pos) ||
+      p.pos.length < 3 ||
+      !Array.isArray(p.target) ||
+      p.target.length < 3
+    ) {
+      return null;
+    }
+    return p;
+  } catch (_) {
+    return null;
+  }
+}
+
+function applyCameraPose(pose) {
+  if (!pose) return false;
+  camera.position.set(pose.pos[0], pose.pos[1], pose.pos[2]);
+  controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+  controls.update();
+  return true;
+}
+
+function frameCamera(simState, { forceDefault = false } = {}) {
+  // Prefer last user orbit for this demo unless forcing scene default
+  if (!forceDefault && state.sceneKey) {
+    const saved = loadCameraPose(state.sceneKey);
+    if (saved) {
+      applyCameraPose(saved);
+      state.cameraUserSet = true;
+      return;
+    }
+  }
   if (!simState?.camera?.target) return;
   const t = simState.camera.target;
   const z = simState.camera.zoom || 12;
   controls.target.set(t[0], t[1], t[2]);
   camera.position.set(t[0] + z * 0.6, t[1] + z * 0.35, t[2] + z * 0.7);
+  controls.update();
+  state.cameraUserSet = false;
 }
 
 function animate() {
@@ -891,6 +973,27 @@ function wireSettingsToggles() {
       setNumbaPreference(toggle.checked);
     });
   }
+  $("resetCameraBtn")?.addEventListener("click", () => {
+    try {
+      localStorage.removeItem(cameraStorageKey(state.sceneKey));
+    } catch (_) {}
+    state.cameraUserSet = false;
+    // Re-frame from current scene snapshot if available
+    frameCamera(
+      {
+        camera: state.scene?.camera || {
+          target: [0, 1, 0],
+          zoom: 12,
+        },
+      },
+      { forceDefault: true }
+    );
+    // If scene camera is nested differently, also try last sim state defaults
+    if (state.scene?.camera) {
+      frameCamera({ camera: state.scene.camera }, { forceDefault: true });
+    }
+    toast("Camera reset to demo default");
+  });
   // Don't collapse Lab panel when clicking Defaults / scope badge
   $("tweaksResetBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
