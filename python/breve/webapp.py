@@ -76,7 +76,7 @@ CURRICULUM = [
     {
         "id": "example_funnel",
         "label": "Funnel",
-        "blurb": "Drop into a V of walls — masses settle differently",
+        "blurb": "Three-layer cascade funnel — masses bounce through each tier",
     },
     {
         "id": "example_flock",

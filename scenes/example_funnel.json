@@ -3,68 +3,171 @@
   "mode": "physics",
   "gravity": [0, -9.8, 0],
   "background": [0.06, 0.08, 0.12],
-  "camera": { "target": [0, 1.5, 0], "zoom": 14 },
-  "notes": "Balls drop into a V of walls — different masses bounce and settle differently in the funnel.",
+  "camera": { "target": [0, 2.4, 0], "zoom": 16 },
+  "notes": "Three-layer stepped funnel: balls cascade through narrowing shelves. Heavy and light masses bounce and settle differently at each tier.",
   "objects": [
     {
       "type": "box", "static": true,
-      "pos": [0, -0.1, 0], "size": [12, 0.2, 8],
-      "color": [0.28, 0.32, 0.35], "restitution": 0.5, "friction": 0.4
+      "pos": [0, -0.12, 0], "size": [14, 0.24, 10],
+      "color": [0.24, 0.28, 0.32], "restitution": 0.4, "friction": 0.55
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [-4.6, 3.6, 0], "size": [0.18, 5.0, 7.5],
+      "color": [0.38, 0.42, 0.48], "restitution": 0.65, "friction": 0.12
     },
     {
       "type": "box", "static": true,
-      "pos": [-2.2, 1.4, 0], "size": [0.2, 3.2, 6],
-      "color": [0.45, 0.5, 0.55], "restitution": 0.7, "friction": 0.15
+      "pos": [4.6, 3.6, 0], "size": [0.18, 5.0, 7.5],
+      "color": [0.38, 0.42, 0.48], "restitution": 0.65, "friction": 0.12
     },
     {
       "type": "box", "static": true,
-      "pos": [2.2, 1.4, 0], "size": [0.2, 3.2, 6],
-      "color": [0.45, 0.5, 0.55], "restitution": 0.7, "friction": 0.15
+      "pos": [0, 3.6, -3.7], "size": [9.4, 5.0, 0.18],
+      "color": [0.34, 0.38, 0.44], "restitution": 0.6, "friction": 0.12
     },
     {
       "type": "box", "static": true,
-      "pos": [-1.3, 0.55, 0], "size": [2.0, 0.15, 5],
-      "color": [0.5, 0.48, 0.4], "restitution": 0.55, "friction": 0.25
+      "pos": [0, 3.6, 3.7], "size": [9.4, 5.0, 0.18],
+      "color": [0.34, 0.38, 0.44], "restitution": 0.6, "friction": 0.12
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [-3.15, 4.85, 0], "size": [2.4, 0.14, 6.4],
+      "color": [0.55, 0.52, 0.42], "restitution": 0.55, "friction": 0.22
     },
     {
       "type": "box", "static": true,
-      "pos": [1.3, 0.55, 0], "size": [2.0, 0.15, 5],
-      "color": [0.5, 0.48, 0.4], "restitution": 0.55, "friction": 0.25
+      "pos": [3.15, 4.85, 0], "size": [2.4, 0.14, 6.4],
+      "color": [0.55, 0.52, 0.42], "restitution": 0.55, "friction": 0.22
     },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 4.85, -2.55], "size": [3.6, 0.14, 1.8],
+      "color": [0.52, 0.5, 0.4], "restitution": 0.55, "friction": 0.22
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 4.85, 2.55], "size": [3.6, 0.14, 1.8],
+      "color": [0.52, 0.5, 0.4], "restitution": 0.55, "friction": 0.22
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [-2.35, 3.35, 0], "size": [2.1, 0.14, 5.6],
+      "color": [0.48, 0.55, 0.58], "restitution": 0.58, "friction": 0.2
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [2.35, 3.35, 0], "size": [2.1, 0.14, 5.6],
+      "color": [0.48, 0.55, 0.58], "restitution": 0.58, "friction": 0.2
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 3.35, -1.95], "size": [2.5, 0.14, 1.5],
+      "color": [0.45, 0.52, 0.55], "restitution": 0.58, "friction": 0.2
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 3.35, 1.95], "size": [2.5, 0.14, 1.5],
+      "color": [0.45, 0.52, 0.55], "restitution": 0.58, "friction": 0.2
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [-1.55, 1.85, 0], "size": [1.7, 0.14, 4.6],
+      "color": [0.42, 0.5, 0.62], "restitution": 0.6, "friction": 0.18
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [1.55, 1.85, 0], "size": [1.7, 0.14, 4.6],
+      "color": [0.42, 0.5, 0.62], "restitution": 0.6, "friction": 0.18
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 1.85, -1.35], "size": [1.5, 0.14, 1.2],
+      "color": [0.4, 0.48, 0.6], "restitution": 0.6, "friction": 0.18
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0, 1.85, 1.35], "size": [1.5, 0.14, 1.2],
+      "color": [0.4, 0.48, 0.6], "restitution": 0.6, "friction": 0.18
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [-0.95, 0.72, 0], "size": [1.15, 0.14, 3.4],
+      "color": [0.5, 0.46, 0.55], "restitution": 0.5, "friction": 0.28
+    },
+    {
+      "type": "box", "static": true,
+      "pos": [0.95, 0.72, 0], "size": [1.15, 0.14, 3.4],
+      "color": [0.5, 0.46, 0.55], "restitution": 0.5, "friction": 0.28
+    },
+
+    {
+      "type": "box", "static": true,
+      "pos": [0, 0.22, 0], "size": [1.35, 0.18, 1.35],
+      "color": [0.32, 0.36, 0.4], "restitution": 0.45, "friction": 0.45
+    },
+
     {
       "type": "sphere", "static": false,
-      "pos": [-0.4, 4.5, -0.5], "pos_jitter": [0.5, 0.3, 0.5],
+      "pos": [-0.6, 7.2, -0.4], "pos_jitter": [0.7, 0.35, 0.7],
       "radius": 0.15, "mass": 0.3,
-      "velocity": [0.5, 0, 0.3], "velocity_jitter": [0.8, 0.3, 0.8],
-      "color": [0.95, 0.9, 0.3], "restitution": 0.85, "friction": 0.1
+      "velocity": [0.4, 0, 0.25], "velocity_jitter": [0.9, 0.25, 0.9],
+      "color": [0.95, 0.9, 0.3], "restitution": 0.82, "friction": 0.1
     },
     {
       "type": "sphere", "static": false,
-      "pos": [0.3, 4.8, 0.4], "pos_jitter": [0.5, 0.3, 0.5],
-      "radius": 0.2, "mass": 1.5,
-      "velocity": [-0.3, 0, -0.2], "velocity_jitter": [0.6, 0.2, 0.6],
-      "color": [0.35, 0.85, 0.5], "restitution": 0.75, "friction": 0.15
+      "pos": [0.5, 7.5, 0.5], "pos_jitter": [0.65, 0.3, 0.65],
+      "radius": 0.2, "mass": 1.6,
+      "velocity": [-0.35, 0, -0.2], "velocity_jitter": [0.7, 0.2, 0.7],
+      "color": [0.35, 0.85, 0.5], "restitution": 0.72, "friction": 0.14
     },
     {
       "type": "sphere", "static": false,
-      "pos": [0.0, 5.0, 0.0], "pos_jitter": [0.4, 0.25, 0.4],
-      "radius": 0.32, "mass": 8.0,
-      "velocity": [0.2, 0, 0.1], "velocity_jitter": [0.5, 0.2, 0.5],
-      "color": [0.9, 0.2, 0.2], "restitution": 0.6, "friction": 0.2
+      "pos": [0.0, 7.8, 0.0], "pos_jitter": [0.55, 0.28, 0.55],
+      "radius": 0.34, "mass": 9.0,
+      "velocity": [0.15, 0, 0.1], "velocity_jitter": [0.55, 0.2, 0.55],
+      "color": [0.9, 0.2, 0.22], "restitution": 0.55, "friction": 0.2
     },
     {
       "type": "sphere", "static": false,
-      "pos": [0.5, 4.6, 0.6], "pos_jitter": [0.45, 0.3, 0.45],
-      "radius": 0.14, "mass": 0.4,
-      "velocity": [-0.4, 0, -0.3], "velocity_jitter": [0.7, 0.3, 0.7],
-      "color": [0.5, 0.7, 1.0], "restitution": 0.88, "friction": 0.1
+      "pos": [0.7, 7.1, 0.7], "pos_jitter": [0.6, 0.3, 0.6],
+      "radius": 0.14, "mass": 0.35,
+      "velocity": [-0.5, 0, -0.35], "velocity_jitter": [0.85, 0.25, 0.85],
+      "color": [0.5, 0.7, 1.0], "restitution": 0.86, "friction": 0.1
     },
     {
       "type": "sphere", "static": false,
-      "pos": [-0.5, 4.7, -0.3], "pos_jitter": [0.45, 0.3, 0.45],
-      "radius": 0.17, "mass": 0.7,
-      "velocity": [0.3, 0, 0.4], "velocity_jitter": [0.7, 0.3, 0.7],
-      "color": [0.9, 0.5, 0.9], "restitution": 0.82, "friction": 0.12
+      "pos": [-0.7, 7.4, -0.55], "pos_jitter": [0.6, 0.3, 0.6],
+      "radius": 0.17, "mass": 0.75,
+      "velocity": [0.35, 0, 0.4], "velocity_jitter": [0.8, 0.25, 0.8],
+      "color": [0.9, 0.5, 0.9], "restitution": 0.8, "friction": 0.12
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [0.25, 7.6, -0.8], "pos_jitter": [0.55, 0.28, 0.55],
+      "radius": 0.22, "mass": 2.8,
+      "velocity": [-0.2, 0, 0.3], "velocity_jitter": [0.65, 0.2, 0.65],
+      "color": [0.95, 0.55, 0.2], "restitution": 0.68, "friction": 0.16
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [-0.3, 7.3, 0.85], "pos_jitter": [0.55, 0.28, 0.55],
+      "radius": 0.13, "mass": 0.25,
+      "velocity": [0.55, 0, -0.45], "velocity_jitter": [0.9, 0.3, 0.9],
+      "color": [0.4, 0.95, 0.85], "restitution": 0.88, "friction": 0.08
+    },
+    {
+      "type": "sphere", "static": false,
+      "pos": [0.9, 7.9, 0.15], "pos_jitter": [0.5, 0.25, 0.5],
+      "radius": 0.28, "mass": 5.5,
+      "velocity": [-0.45, 0, 0.15], "velocity_jitter": [0.6, 0.2, 0.6],
+      "color": [0.7, 0.3, 0.85], "restitution": 0.6, "friction": 0.18
     }
   ]
 }
