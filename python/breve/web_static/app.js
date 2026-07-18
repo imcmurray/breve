@@ -117,6 +117,10 @@ function applyState(simState) {
     const mesh = ensureMesh(obj);
     mesh.position.set(obj.pos[0], obj.pos[1], obj.pos[2]);
     mesh.material.color.copy(colorFromArr(obj.color));
+    // physics quat is (w,x,y,z); three.js is (x,y,z,w)
+    if (obj.quat && obj.quat.length >= 4) {
+      mesh.quaternion.set(obj.quat[1], obj.quat[2], obj.quat[3], obj.quat[0]);
+    }
   }
   for (const id of [...state.meshes.keys()]) {
     if (!live.has(id)) {
@@ -489,12 +493,7 @@ $("resetBtn").addEventListener("click", () => {
 
 async function boot() {
   addBubble(
-    "This is the product: a live continuous 3D multi-agent world in your browser.\n\n" +
-      "• Demo auto-starts (no API key)\n" +
-      "• Curriculum chips teach gravity, mass, impact, flocking\n" +
-      "• Paste an xAI key only when you want to invent scenes in English\n" +
-      "• Share copies a link to this world\n\n" +
-      "Drag the 3D view to orbit. That’s the whole point of this revival.",
+    "Demo auto-starts — no API key needed. Use curriculum chips, or paste an xAI key to invent scenes. Drag the 3D view to orbit.",
     "system"
   );
   await refreshStatus();

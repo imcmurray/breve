@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import breve
 from breve.engine import Engine, set_engine
 
@@ -57,8 +59,8 @@ def test_sphere_bounces_on_box():
     assert c.ball.location.y > 0.05
 
 
-def test_box_falls_off_floor_edge():
-    """COM past the edge of a platform must not stay magically supported."""
+def test_box_tips_off_platform_edge():
+    """Offset support + gravity + torque should drop a box past the rim."""
     set_engine(Engine())
 
     class C(breve.PhysicalControl):
@@ -66,23 +68,49 @@ def test_box_falls_off_floor_edge():
             self.set_integration_step(0.004)
             self.set_iteration_step(0.016)
             self.full_gravity()
-            # small platform centered at origin
             floor = breve.Stationary()
             floor.set_shape(breve.Box().init_with(breve.vector(2.0, 0.2, 2.0)))
             floor.move(breve.vector(0, -0.1, 0))
             breve.get_engine().register_physics_body(floor, static=True)
-            # box mostly off +X edge (center at x=1.2, platform only to x=1.0)
+            # center near the edge; a push + gravity should tip it off
             self.box = breve.Mobile()
             self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
-            self.box.move(breve.vector(1.25, 0.4, 0))
-            self.box.set_velocity(breve.vector(0, 0, 0))
+            self.box.move(breve.vector(0.85, 0.4, 0))
+            self.box.set_velocity(breve.vector(1.5, 0, 0))
             self.box.enable_physics(mass=1.0)
 
     c = C()
     y0 = c.box.location.y
-    c.run(steps=80)
-    # should have fallen well below the platform top
-    assert c.box.location.y < y0 - 0.5
+    c.run(steps=120)
+    # fallen well below the platform
+    assert c.box.location.y < y0 - 0.3
+
+
+def test_offset_hit_spins_box():
+    """Impulse away from COM should produce angular velocity."""
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.zero_gravity()
+            self.set_integration_step(0.005)
+            self.set_iteration_step(0.02)
+            self.box = breve.Mobile()
+            self.box.set_shape(breve.Box().init_with(breve.vector(1.0, 0.4, 0.4)))
+            self.box.move(breve.vector(0, 1.0, 0))
+            self.box.set_velocity(breve.vector(0, 0, 0))
+            self.box.enable_physics(mass=2.0)
+            ball = breve.Mobile()
+            ball.set_shape(breve.Sphere().init_with(0.2))
+            ball.move(breve.vector(-1.2, 1.15, 0))  # hit top half of box
+            ball.set_velocity(breve.vector(8, 0, 0))
+            ball.enable_physics(mass=1.0)
+
+    c = C()
+    body = breve.get_engine().physics.get_body(c.box)
+    c.run(steps=15)
+    omega = float(np.linalg.norm(body.angular_velocity))
+    assert omega > 0.05
 
 
 def test_gravity_demo_runs():

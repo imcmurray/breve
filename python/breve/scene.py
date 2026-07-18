@@ -414,6 +414,12 @@ def snapshot_state(sim: SceneController) -> Dict[str, Any]:
             ]
             entry["mass"] = float(getattr(obj, "mass", 1.0))
             entry["physics"] = bool(getattr(obj, "physics_enabled", False))
+        # orientation from physics body (w,x,y,z) for three.js
+        quat = getattr(obj, "_physics_quat", None)
+        if quat is not None:
+            entry["quat"] = [float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])]
+        else:
+            entry["quat"] = [1.0, 0.0, 0.0, 0.0]
         objects.append(entry)
 
     cam = {
