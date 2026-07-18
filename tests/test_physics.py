@@ -60,7 +60,34 @@ def test_sphere_bounces_on_box():
 
 
 def test_box_tips_off_platform_edge():
-    """Offset support + gravity + torque should drop a box past the rim."""
+    """COM past the rim: gravity + contact torque at the edge must tip it off."""
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.set_integration_step(0.004)
+            self.set_iteration_step(0.016)
+            self.full_gravity()
+            # platform occupies x in [-1, 1]
+            floor = breve.Stationary()
+            floor.set_shape(breve.Box().init_with(breve.vector(2.0, 0.2, 2.0)))
+            floor.move(breve.vector(0, -0.1, 0))
+            breve.get_engine().register_physics_body(floor, static=True)
+            # 0.5-wide box: COM at 1.05 is past the rim (x=1); only the
+            # inner face still overlaps. No initial push — weight alone tips it.
+            self.box = breve.Mobile()
+            self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+            self.box.move(breve.vector(1.05, 0.35, 0))
+            self.box.set_velocity(breve.vector(0, 0, 0))
+            self.box.enable_physics(mass=1.0)
+
+    c = C()
+    c.run(steps=100)
+    assert c.box.location.y < -0.5
+
+
+def test_box_stack_tips_off_edge():
+    """Stacked boxes with COMs past the platform edge must all fall."""
     set_engine(Engine())
 
     class C(breve.PhysicalControl):
@@ -72,18 +99,17 @@ def test_box_tips_off_platform_edge():
             floor.set_shape(breve.Box().init_with(breve.vector(2.0, 0.2, 2.0)))
             floor.move(breve.vector(0, -0.1, 0))
             breve.get_engine().register_physics_body(floor, static=True)
-            # center near the edge; a push + gravity should tip it off
-            self.box = breve.Mobile()
-            self.box.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
-            self.box.move(breve.vector(0.85, 0.4, 0))
-            self.box.set_velocity(breve.vector(1.5, 0, 0))
-            self.box.enable_physics(mass=1.0)
+            self.boxes = []
+            for i in range(3):
+                b = breve.Mobile()
+                b.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+                b.move(breve.vector(1.05, 0.35 + i * 0.52, 0))
+                b.enable_physics(mass=0.5)
+                self.boxes.append(b)
 
     c = C()
-    y0 = c.box.location.y
-    c.run(steps=120)
-    # fallen well below the platform
-    assert c.box.location.y < y0 - 0.3
+    c.run(steps=150)
+    assert all(b.location.y < -0.5 for b in c.boxes)
 
 
 def test_offset_hit_spins_box():

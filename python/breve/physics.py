@@ -200,8 +200,8 @@ class PhysicsWorld:
         self.iterations: int = 12
         self.slop: float = 0.005
         self.baumgarte: float = 0.25
-        self.linear_damping: float = 0.01
-        self.angular_damping: float = 0.05
+        self.linear_damping: float = 0.005
+        self.angular_damping: float = 0.02
         self.bounce_threshold: float = 0.4
         self.enabled: bool = True
 
@@ -331,6 +331,13 @@ class PhysicsWorld:
             )
             body.velocity *= max(0.0, 1.0 - self.linear_damping)
             body.angular_velocity *= max(0.0, 1.0 - self.angular_damping)
+            # clamp runaway spin/speed from deep-contact iterations
+            speed = float(np.linalg.norm(body.velocity))
+            if speed > 60.0:
+                body.velocity *= 60.0 / speed
+            w = float(np.linalg.norm(body.angular_velocity))
+            if w > 25.0:
+                body.angular_velocity *= 25.0 / w
             body.force[:] = 0.0
             body.torque[:] = 0.0
 
@@ -460,6 +467,39 @@ def _sphere_obb(sphere: RigidBody, box: RigidBody) -> Optional[Contact]:
     return Contact(sphere, box, normal, pen, closest)
 
 
+def _closest_point_on_body(body: RigidBody, point: np.ndarray) -> np.ndarray:
+    """Closest point on the body's surface/volume to a world-space point."""
+    assert body.collider is not None
+    if body.collider.kind == ShapeKind.SPHERE:
+        r = float(body.collider.data[0])
+        d = point - body.position
+        dist = float(np.linalg.norm(d))
+        if dist < 1e-12:
+            return body.position + np.array([0.0, r, 0.0])
+        return body.position + d * (r / dist)
+    R = body.rotation_matrix()
+    half = body.collider.data
+    local = R.T @ (point - body.position)
+    clamped = np.minimum(half, np.maximum(-half, local))
+    return body.position + R @ clamped
+
+
+def _contact_point_on_normal(a: RigidBody, b: RigidBody, n: np.ndarray) -> np.ndarray:
+    """
+    Contact location for torque computation.
+
+    Must be the actual surface region between the two shapes — not the midpoint
+    of centers (that puts the force deep under a platform) and not SAT support
+    corners of a large floor (that puts the force on the far side).
+
+    Closest-point pair keeps the force under the upper body, on the rim when
+    the COM hangs past the edge, so gravity produces a tipping torque.
+    """
+    pa = _closest_point_on_body(a, b.position)
+    pb = _closest_point_on_body(b, a.position)
+    return 0.5 * (pa + pb)
+
+
 def _obb_obb(a: RigidBody, b: RigidBody) -> Optional[Contact]:
     """
     Oriented box vs oriented box (SAT).
@@ -469,63 +509,47 @@ def _obb_obb(a: RigidBody, b: RigidBody) -> Optional[Contact]:
     hb = b.collider.data  # type: ignore[union-attr]
     Ra = a.rotation_matrix()
     Rb = b.rotation_matrix()
-    # axes as columns
     Ae = [Ra[:, 0], Ra[:, 1], Ra[:, 2]]
     Be = [Rb[:, 0], Rb[:, 1], Rb[:, 2]]
 
-    t = b.position - a.position  # from a to b for SAT; we'll flip normal later
+    t = b.position - a.position
 
-    # rotation matrix of B in A's frame
     R = Ra.T @ Rb
     AbsR = np.abs(R) + 1e-8
+    t_a = Ra.T @ t
 
-    t_a = Ra.T @ t  # t in A frame
-
-    # test axes: 3 from A, 3 from B, 9 cross products
-    # We track min penetration and best axis (in world space)
     min_pen = 1e30
     best_n = None
-    best_from_a = True
 
-    def consider(pen: float, axis_world: np.ndarray, from_a: bool) -> bool:
-        nonlocal min_pen, best_n, best_from_a
+    def consider(pen: float, axis_world: np.ndarray) -> None:
+        nonlocal min_pen, best_n
         nlen = float(np.linalg.norm(axis_world))
         if nlen < 1e-10:
-            return True
+            return
         axis_world = axis_world / nlen
-        # ensure axis points from a toward b roughly for consistency mid-search
         if float(np.dot(axis_world, t)) < 0:
             axis_world = -axis_world
         if pen < min_pen:
             min_pen = pen
             best_n = axis_world
-            best_from_a = from_a
-        return True
 
-    # A's axes
     for i in range(3):
         ra = float(ha[i])
-        rb = float(
-            hb[0] * AbsR[i, 0] + hb[1] * AbsR[i, 1] + hb[2] * AbsR[i, 2]
-        )
+        rb = float(hb[0] * AbsR[i, 0] + hb[1] * AbsR[i, 1] + hb[2] * AbsR[i, 2])
         pen = ra + rb - abs(float(t_a[i]))
         if pen <= 0:
             return None
-        consider(pen, Ae[i], True)
+        consider(pen, Ae[i])
 
-    # B's axes
     t_b = Rb.T @ t
     for i in range(3):
-        ra = float(
-            ha[0] * AbsR[0, i] + ha[1] * AbsR[1, i] + ha[2] * AbsR[2, i]
-        )
+        ra = float(ha[0] * AbsR[0, i] + ha[1] * AbsR[1, i] + ha[2] * AbsR[2, i])
         rb = float(hb[i])
         pen = ra + rb - abs(float(t_b[i]))
         if pen <= 0:
             return None
-        consider(pen, Be[i], False)
+        consider(pen, Be[i])
 
-    # Cross products Ai × Bj
     for i in range(3):
         for j in range(3):
             axis = _cross(Ae[i], Be[j])
@@ -533,7 +557,6 @@ def _obb_obb(a: RigidBody, b: RigidBody) -> Optional[Contact]:
             if nlen < 1e-8:
                 continue
             axis_n = axis / nlen
-            # project half-sizes
             ra = float(
                 ha[0] * abs(float(np.dot(Ae[0], axis_n)))
                 + ha[1] * abs(float(np.dot(Ae[1], axis_n)))
@@ -547,19 +570,17 @@ def _obb_obb(a: RigidBody, b: RigidBody) -> Optional[Contact]:
             pen = ra + rb - abs(float(np.dot(t, axis_n)))
             if pen <= 0:
                 return None
-            consider(pen, axis_n, True)
+            consider(pen, axis_n)
 
     if best_n is None or min_pen >= 1e29:
         return None
 
-    # normal should point from b to a (out of b into a)
     n = best_n
+    # normal from b toward a
     if float(np.dot(n, a.position - b.position)) < 0:
         n = -n
 
-    # contact point: approximate as midpoint of centers projected along normal
-    # more stably: a.pos - n * (projection of half-size of a along n)
-    point = 0.5 * (a.position + b.position)
+    point = _contact_point_on_normal(a, b, n)
     return Contact(a, b, n, float(min_pen), point)
 
 
@@ -583,13 +604,19 @@ def _resolve_contact(
     ra = p - a.position
     rb = p - b.position
 
-    def angular_term(body: RigidBody, r: np.ndarray) -> float:
+    def angular_denom(body: RigidBody, r: np.ndarray, axis: np.ndarray) -> float:
+        """(r × axis) · I^{-1} (r × axis) — correct effective mass term."""
         if body.static:
             return 0.0
-        rn = _cross(r, n)
-        return float(np.dot(n, body.inv_inertia_world() @ rn))
+        r_x_axis = _cross(r, axis)
+        return float(np.dot(r_x_axis, body.inv_inertia_world() @ r_x_axis))
 
-    denom = a.inv_mass + b.inv_mass + angular_term(a, ra) + angular_term(b, rb)
+    denom = (
+        a.inv_mass
+        + b.inv_mass
+        + angular_denom(a, ra, n)
+        + angular_denom(b, rb, n)
+    )
     if denom <= 1e-12:
         return
 
@@ -597,6 +624,8 @@ def _resolve_contact(
         impact = -vel_n
         e_eff = e if impact > bounce_threshold else 0.0
         j = -(1.0 + e_eff) * vel_n / denom
+        # keep solver stable under deep penetration / stacks
+        j = float(np.clip(j, -40.0, 40.0))
         impulse = n * j
         a.apply_impulse_at(impulse, p)
         b.apply_impulse_at(-impulse, p)
@@ -609,15 +638,11 @@ def _resolve_contact(
         tlen = float(np.linalg.norm(tangent))
         if tlen > 1e-8:
             t_hat = tangent / tlen
-
-            def ang_t(body: RigidBody, r: np.ndarray) -> float:
-                if body.static:
-                    return 0.0
-                rt = _cross(r, t_hat)
-                return float(np.dot(t_hat, body.inv_inertia_world() @ rt))
-
             denom_t = (
-                a.inv_mass + b.inv_mass + ang_t(a, ra) + ang_t(b, rb)
+                a.inv_mass
+                + b.inv_mass
+                + angular_denom(a, ra, t_hat)
+                + angular_denom(b, rb, t_hat)
             )
             if denom_t > 1e-12:
                 jt = -float(np.dot(rv, t_hat)) / denom_t
