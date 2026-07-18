@@ -18,6 +18,7 @@ const state = {
   shareToken: null,
   tweaks: null,
   _tweakReloadTimer: null,
+  _cmdQueue: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -521,11 +522,29 @@ function onTweakInput(def, input) {
   }
 }
 
-function sendHousekeeping() {
+function housekeepingPrefs() {
   const t = state.tweaks || TWEAK_DEFAULTS;
+  return {
+    auto_pause: Number(t.autoPause ?? 1) >= 0.5,
+    cull_oob: Number(t.cullOob ?? 1) >= 0.5,
+    speed: Number(t.speed ?? 1),
+  };
+}
+
+function sendHousekeeping() {
+  const p = housekeepingPrefs();
   sendCmd("set_housekeeping", {
-    auto_pause: (t.autoPause ?? 1) >= 0.5,
-    cull_oob: (t.cullOob ?? 1) >= 0.5,
+    auto_pause: p.auto_pause,
+    cull_oob: p.cull_oob,
+  });
+}
+
+function pushSessionPrefs() {
+  const p = housekeepingPrefs();
+  sendCmd("set_speed", { speed: p.speed });
+  sendCmd("set_housekeeping", {
+    auto_pause: p.auto_pause,
+    cull_oob: p.cull_oob,
   });
 }
 
@@ -535,15 +554,16 @@ async function applyTweaksLive(forceRestart) {
   state.scene = scene;
   if (!state.sessionId || !state.ws || state.ws.readyState !== WebSocket.OPEN || forceRestart) {
     await startSession(scene);
-    sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
-    sendHousekeeping();
+    // prefs applied in startSession body + ws.onopen
     return;
   }
   sendCmd("reload_scene", { scene });
-  sendCmd("set_speed", { speed: state.tweaks?.speed ?? 1 });
-  sendHousekeeping();
+  pushSessionPrefs();
   const n = (scene.objects || []).filter((o) => !o.static).length;
-  $("simStatus").textContent = `Tweaks applied · ${n} bodies · running`;
+  const p = housekeepingPrefs();
+  $("simStatus").textContent = p.auto_pause
+    ? `Tweaks applied · ${n} bodies · running`
+    : `Tweaks applied · ${n} bodies · auto-pause off`;
 }
 
 function setBaseScene(scene, sceneKey) {
@@ -1077,10 +1097,17 @@ $("refineBtn").addEventListener("click", () => {
 async function startSession(sceneSpec) {
   stopWs();
   clearMeshes();
+  state._cmdQueue = [];
+  const prefs = housekeepingPrefs();
   const r = await fetch("/api/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scene: sceneSpec }),
+    body: JSON.stringify({
+      scene: sceneSpec,
+      auto_pause: prefs.auto_pause,
+      cull_oob: prefs.cull_oob,
+      speed: prefs.speed,
+    }),
   });
   const j = await r.json();
   if (!r.ok) {
@@ -1092,7 +1119,8 @@ async function startSession(sceneSpec) {
   applyState(j.state);
   frameCamera(j.state);
   connectWs(j.session_id);
-  $("simStatus").textContent = `Running · session ${j.session_id}`;
+  const ap = j.auto_pause === false ? "auto-pause off" : "auto-pause on";
+  $("simStatus").textContent = `Running · ${ap}`;
 }
 
 function stopWs() {
@@ -1102,17 +1130,30 @@ function stopWs() {
     } catch (_) {}
     state.ws = null;
   }
+  state._cmdQueue = [];
 }
 
 function connectWs(sessionId) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/sim/${sessionId}`);
   state.ws = ws;
+  ws.onopen = () => {
+    // Re-apply lab prefs once the socket is live (covers race after session create)
+    pushSessionPrefs();
+    const q = state._cmdQueue.splice(0, state._cmdQueue.length);
+    for (const msg of q) {
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify(msg));
+      }
+    }
+  };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") {
       applyState(msg.state);
-      if (msg.just_settled || msg.auto_paused) {
+      // Only treat as auto-pause when the server flags it AND lab still wants it
+      const wantAuto = Number((state.tweaks || TWEAK_DEFAULTS).autoPause ?? 1) >= 0.5;
+      if (wantAuto && (msg.just_settled || msg.auto_paused)) {
         state.paused = true;
         const culled =
           msg.culled_total != null ? msg.culled_total : msg.culled || 0;
@@ -1136,8 +1177,12 @@ function connectWs(sessionId) {
 }
 
 function sendCmd(cmd, extra = {}) {
+  const msg = { cmd, ...extra };
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ cmd, ...extra }));
+    state.ws.send(JSON.stringify(msg));
+  } else {
+    // Queue until websocket opens (session start race)
+    state._cmdQueue.push(msg);
   }
 }
 

@@ -114,6 +114,11 @@ class ChatResponse(BaseModel):
 class RunRequest(BaseModel):
     scene: Dict[str, Any]
     session_id: Optional[str] = None
+    # Lab housekeeping prefs (applied at session create so they aren't lost
+    # before the WebSocket is open).
+    auto_pause: Optional[bool] = None
+    cull_oob: Optional[bool] = None
+    speed: Optional[float] = None
 
 
 class ShareRequest(BaseModel):
@@ -307,19 +312,33 @@ def create_session(req: RunRequest) -> Dict[str, Any]:
     sid = req.session_id or uuid.uuid4().hex[:12]
     # tear down old
     _sessions.pop(sid, None)
+    speed = 1.0
+    if req.speed is not None:
+        try:
+            speed = max(0.1, min(4.0, float(req.speed)))
+        except (TypeError, ValueError):
+            speed = 1.0
+    auto_pause = True if req.auto_pause is None else bool(req.auto_pause)
+    cull_oob = True if req.cull_oob is None else bool(req.cull_oob)
     _sessions[sid] = {
         "sim": sim,
         "paused": False,
         "scene": req.scene,
-        "speed": 1.0,
-        "auto_pause": True,
-        "cull_oob": True,
+        "speed": speed,
+        "auto_pause": auto_pause,
+        "cull_oob": cull_oob,
         "settle_ticks": 0,
         "auto_paused": False,
         "culled_total": 0,
     }
     snap = snapshot_state(sim)
-    return {"session_id": sid, "state": snap}
+    return {
+        "session_id": sid,
+        "state": snap,
+        "auto_pause": auto_pause,
+        "cull_oob": cull_oob,
+        "speed": speed,
+    }
 
 
 @app.delete("/api/session/{session_id}")
@@ -381,12 +400,14 @@ async def sim_socket(websocket: WebSocket, session_id: str) -> None:
                     sess["speed"] = max(0.1, min(4.0, sp))
                 elif cmd == "set_housekeeping":
                     if "auto_pause" in data:
-                        sess["auto_pause"] = bool(data["auto_pause"])
+                        # explicit False must win (avoid truthy string quirks)
+                        sess["auto_pause"] = data["auto_pause"] in (True, 1, "1", "true", "True")
                     if "cull_oob" in data:
-                        sess["cull_oob"] = bool(data["cull_oob"])
+                        sess["cull_oob"] = data["cull_oob"] in (True, 1, "1", "true", "True")
                     if not sess.get("auto_pause"):
                         sess["settle_ticks"] = 0
-                        if sess.get("auto_paused"):
+                        if sess.get("auto_paused") or sess.get("paused"):
+                            # Unstick if user turned auto-pause off while settled
                             sess["auto_paused"] = False
                             sess["paused"] = False
                 elif cmd == "reload_scene":
