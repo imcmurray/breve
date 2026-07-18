@@ -256,24 +256,33 @@ class PhysicsWorld:
             self._by_owner[id(owner)] = body
             return body
 
-        # Preserve orientation / spin across registration updates
-        existing.position[:] = pos
-        existing.velocity[:] = vel
+        # Update mass/shape only — do NOT stomp velocity/orientation each frame
+        # (that destroyed tipping and left bodies skating forever).
         existing.mass = max(mass, 1e-6)
-        existing.restitution = restitution
-        existing.friction = friction
         existing.collider = collider
         was_static = existing.static
-        existing.set_static(static)
-        if was_static and not static:
+        if static != was_static:
+            existing.set_static(static)
+        elif not static:
+            existing.inv_mass = 1.0 / existing.mass
+            existing._recompute_local_inertia()
+        # Explicit resync (teleport / scene reset)
+        if getattr(owner, "_physics_resync", False):
+            existing.position[:] = pos
+            existing.velocity[:] = vel
             existing.orientation = _q_identity()
             existing.angular_velocity[:] = 0.0
+            existing.awake = True
+            owner._physics_resync = False  # type: ignore[attr-defined]
         return existing
 
     def sync_from_owners(self) -> None:
+        """Pull pose from owners only when flagged (teleport)."""
         for body in self.bodies:
             owner = body.owner
             if owner is None or not getattr(owner, "enabled", True):
+                continue
+            if not getattr(owner, "_physics_resync", False):
                 continue
             body.position[:] = [
                 owner.location.x,
@@ -286,9 +295,13 @@ class PhysicsWorld:
                     owner.velocity.y,
                     owner.velocity.z,
                 ]
+            body.orientation = _q_identity()
+            body.angular_velocity[:] = 0.0
             body.collider = _collider_from_shape(getattr(owner, "shape", None))
             if not body.static:
                 body._recompute_local_inertia()
+            body.awake = True
+            owner._physics_resync = False  # type: ignore[attr-defined]
 
     def sync_to_owners(self) -> None:
         from breve.vector import vector
@@ -353,8 +366,23 @@ class PhysicsWorld:
         for _ in range(self.iterations):
             for c in contacts:
                 _resolve_contact(
-                    c, self.slop, self.baumgarte, self.bounce_threshold
+                    c, self.slop, self.baumgarte, self.bounce_threshold, dt
                 )
+
+        # Rest only when actually in contact and nearly still — never damp
+        # free-fall or the gravity accumulation / tipping torque dies.
+        in_contact = set()
+        for c in contacts:
+            in_contact.add(id(c.a))
+            in_contact.add(id(c.b))
+        for body in self.bodies:
+            if body.static or id(body) not in in_contact:
+                continue
+            speed = float(np.linalg.norm(body.velocity))
+            spin = float(np.linalg.norm(body.angular_velocity))
+            if speed < 0.04 and spin < 0.08:
+                body.velocity[:] = 0.0
+                body.angular_velocity[:] = 0.0
 
     def _find_contacts(self) -> List[Contact]:
         contacts: List[Contact] = []
@@ -589,6 +617,7 @@ def _resolve_contact(
     slop: float,
     baumgarte: float,
     bounce_threshold: float,
+    dt: float = 1.0 / 60.0,
 ) -> None:
     a, b = c.a, c.b
     n = c.normal
@@ -620,48 +649,56 @@ def _resolve_contact(
     if denom <= 1e-12:
         return
 
-    if vel_n < 0:
-        impact = -vel_n
-        e_eff = e if impact > bounce_threshold else 0.0
-        j = -(1.0 + e_eff) * vel_n / denom
-        # keep solver stable under deep penetration / stacks
-        j = float(np.clip(j, -40.0, 40.0))
+    # Baumgarte bias: push out of penetration as a velocity goal
+    pen = max(c.penetration - slop, 0.0)
+    bias = (baumgarte * pen / max(dt, 1e-4)) if pen > 0 else 0.0
+
+    # Resting: no bounce when impact is soft
+    impact = max(0.0, -vel_n)
+    e_eff = e if impact > bounce_threshold else 0.0
+
+    # Remove relative normal velocity + bias (works for resting and impact)
+    j = (-(vel_n + bias) - e_eff * min(vel_n, 0.0)) / denom
+    # only apply if it separates (prevents sticky pull when already separating hard)
+    if j < 0:
+        # allowing small negative for bias-only cases: recompute
+        j = -(vel_n + bias) / denom
+    j = float(np.clip(j, 0.0, 50.0))  # repulsive only
+    if j > 0:
         impulse = n * j
         a.apply_impulse_at(impulse, p)
         b.apply_impulse_at(-impulse, p)
 
-        # Coulomb friction at contact point
-        va = a.velocity_at_point(p)
-        vb = b.velocity_at_point(p)
-        rv = va - vb
-        tangent = rv - n * float(np.dot(rv, n))
-        tlen = float(np.linalg.norm(tangent))
-        if tlen > 1e-8:
-            t_hat = tangent / tlen
-            denom_t = (
-                a.inv_mass
-                + b.inv_mass
-                + angular_denom(a, ra, t_hat)
-                + angular_denom(b, rb, t_hat)
-            )
-            if denom_t > 1e-12:
-                jt = -float(np.dot(rv, t_hat)) / denom_t
-                mu = (a.friction + b.friction) * 0.5
-                if e_eff > 0.4:
-                    mu *= 0.4
-                jt = float(np.clip(jt, -abs(j) * mu, abs(j) * mu))
-                a.apply_impulse_at(t_hat * jt, p)
-                b.apply_impulse_at(-t_hat * jt, p)
+    # Friction whenever we have a contact (kills skating / endless spin on floors)
+    va = a.velocity_at_point(p)
+    vb = b.velocity_at_point(p)
+    rv = va - vb
+    tangent = rv - n * float(np.dot(rv, n))
+    tlen = float(np.linalg.norm(tangent))
+    if tlen > 1e-5:
+        t_hat = tangent / tlen
+        denom_t = (
+            a.inv_mass
+            + b.inv_mass
+            + angular_denom(a, ra, t_hat)
+            + angular_denom(b, rb, t_hat)
+        )
+        if denom_t > 1e-12:
+            jt = -float(np.dot(rv, t_hat)) / denom_t
+            mu = (a.friction + b.friction) * 0.5
+            # stronger grip when nearly resting
+            if impact < bounce_threshold:
+                mu = max(mu, 0.6)
+            jt = float(np.clip(jt, -j * mu if j > 1e-8 else -mu * 2.0, j * mu if j > 1e-8 else mu * 2.0))
+            a.apply_impulse_at(t_hat * jt, p)
+            b.apply_impulse_at(-t_hat * jt, p)
 
-    # Baumgarte positional correction along normal (linear only — enough for stacking)
-    pen = max(c.penetration - slop, 0.0)
-    if pen > 0:
+    # Light linear split for deep penetration (after velocity solve)
+    if pen > slop * 2:
         inv = a.inv_mass + b.inv_mass
         if inv > 1e-12:
-            correction = n * (pen * baumgarte / inv)
+            correction = n * (0.2 * pen / inv)
             if not a.static:
                 a.position = a.position + correction * a.inv_mass
-                a.awake = True
             if not b.static:
                 b.position = b.position - correction * b.inv_mass
-                b.awake = True

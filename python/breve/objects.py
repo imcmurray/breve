@@ -47,6 +47,16 @@ class Real(Object):
 
     def move(self, loc: Vector) -> None:
         self.location = loc if isinstance(loc, Vector) else vector(*loc)
+        # Keep physics body in sync on scripted teleports
+        body = get_engine().physics.get_body(self)
+        if body is not None:
+            body.position[:] = [self.location.x, self.location.y, self.location.z]
+            body.velocity[:] = 0.0
+            body.angular_velocity[:] = 0.0
+            body.orientation = __import__(
+                "breve.physics", fromlist=["_q_identity"]
+            )._q_identity()
+            body.awake = True
 
     def offset(self, delta: Vector) -> None:
         d = delta if isinstance(delta, Vector) else vector(*delta)
@@ -142,6 +152,10 @@ class Mobile(Real):
 
     def set_velocity(self, v: Vector) -> None:
         self.velocity = v if isinstance(v, Vector) else vector(*v)
+        body = get_engine().physics.get_body(self)
+        if body is not None and not body.static:
+            body.velocity[:] = [self.velocity.x, self.velocity.y, self.velocity.z]
+            body.awake = True
 
     def setVelocity(self, v: Vector) -> None:  # noqa: N802
         self.set_velocity(v)

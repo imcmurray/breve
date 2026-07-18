@@ -164,17 +164,25 @@ class SceneController(PhysicalControl):
 
         eng = get_engine()
         if physics or static:
-            eng.register_physics_body(body, static=static, mass=mass if not static else 0.0)
             if not static:
                 body.physics_enabled = True
                 body.mass = mass
+            eng.register_physics_body(body, static=static, mass=mass if not static else 0.0)
             pb = eng.physics.get_body(body)
             if pb is not None:
                 pb.restitution = restitution
                 pb.friction = friction
+                pb.position[:] = [pos.x, pos.y, pos.z]
                 if not static and vel is not None:
                     pb.velocity[:] = [vel.x, vel.y, vel.z]
-                pb.position[:] = [pos.x, pos.y, pos.z]
+                else:
+                    pb.velocity[:] = 0.0
+                pb.angular_velocity[:] = 0.0
+                from breve.physics import _q_identity
+
+                pb.orientation = _q_identity()
+                if not static:
+                    pb._recompute_local_inertia()
                 pb.awake = True
 
     def _spawn_agents(self, agent: Dict[str, Any]) -> None:

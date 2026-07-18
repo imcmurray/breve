@@ -134,17 +134,19 @@ class Engine:
         from breve.objects import Mobile, Stationary
 
         if self.physics_enabled:
-            # ensure bodies exist for physical mobiles / statics with shapes
+            # Ensure bodies exist once; physics is the authority for pose/velocity
+            # after creation (avoids clobbering spin / friction every substep).
             for obj in self.objects:
                 if not obj.enabled or obj.shape is None:
                     continue
                 if isinstance(obj, Mobile) and getattr(obj, "physics_enabled", False):
-                    mass = getattr(obj, "mass", 1.0)
-                    self.physics.add_or_update(obj, static=False, mass=mass)
+                    if self.physics.get_body(obj) is None:
+                        mass = getattr(obj, "mass", 1.0)
+                        self.physics.add_or_update(obj, static=False, mass=mass)
                 elif isinstance(obj, Stationary):
-                    self.physics.add_or_update(obj, static=True, mass=0.0)
+                    if self.physics.get_body(obj) is None:
+                        self.physics.add_or_update(obj, static=True, mass=0.0)
 
-            self.physics.sync_from_owners()
             self.physics.step(h)
             self.physics.sync_to_owners()
 
