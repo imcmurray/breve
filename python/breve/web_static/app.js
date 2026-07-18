@@ -624,6 +624,26 @@ function colorFromArr(c) {
   return new THREE.Color(c[0], c[1], c[2]);
 }
 
+function applyMaterialStyle(mat, obj) {
+  const opacity =
+    obj.opacity != null ? Math.min(1, Math.max(0, Number(obj.opacity))) : 1;
+  mat.color.copy(colorFromArr(obj.color));
+  mat.transparent = opacity < 0.999;
+  mat.opacity = opacity;
+  mat.depthWrite = opacity >= 0.95;
+  // glass-ish sides so the cascade reads through them
+  if (opacity < 0.999) {
+    mat.metalness = 0.05;
+    mat.roughness = 0.18;
+    mat.side = THREE.DoubleSide;
+  } else {
+    mat.metalness = 0.15;
+    mat.roughness = 0.55;
+    mat.side = THREE.FrontSide;
+  }
+  mat.needsUpdate = true;
+}
+
 function ensureMesh(obj) {
   let mesh = state.meshes.get(obj.id);
   if (mesh) return mesh;
@@ -632,6 +652,7 @@ function ensureMesh(obj) {
     metalness: 0.15,
     roughness: 0.55,
   });
+  applyMaterialStyle(mat, obj);
   let geo;
   if (obj.type === "box") {
     const s = obj.size || [1, 1, 1];
@@ -640,8 +661,11 @@ function ensureMesh(obj) {
     geo = new THREE.SphereGeometry(obj.radius || 0.25, 24, 16);
   }
   mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
+  const opacity = obj.opacity != null ? Number(obj.opacity) : 1;
+  mesh.castShadow = opacity >= 0.95;
   mesh.receiveShadow = true;
+  // transparent walls render after opaque balls so you see through correctly
+  mesh.renderOrder = opacity < 0.999 ? 1 : 0;
   scene3.add(mesh);
   state.meshes.set(obj.id, mesh);
   return mesh;
@@ -655,7 +679,7 @@ function applyState(simState) {
     if (obj.type === "box" && obj.size && Math.max(...obj.size) > 50) continue;
     const mesh = ensureMesh(obj);
     mesh.position.set(obj.pos[0], obj.pos[1], obj.pos[2]);
-    mesh.material.color.copy(colorFromArr(obj.color));
+    applyMaterialStyle(mesh.material, obj);
     // physics quat is (w,x,y,z); three.js is (x,y,z,w)
     if (obj.quat && obj.quat.length >= 4) {
       mesh.quaternion.set(obj.quat[1], obj.quat[2], obj.quat[3], obj.quat[0]);

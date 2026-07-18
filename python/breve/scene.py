@@ -159,6 +159,13 @@ class SceneController(PhysicalControl):
 
         body.move(pos)
         body.set_color(color)
+        # Optional 0–1 opacity for web viewer (physics unchanged).
+        if obj.get("opacity") is not None:
+            body.opacity = float(obj["opacity"])  # type: ignore[attr-defined]
+        elif obj.get("transparent") is True:
+            body.opacity = 0.22  # type: ignore[attr-defined]
+        else:
+            body.opacity = 1.0  # type: ignore[attr-defined]
 
         if not static and vel is not None:
             body.set_velocity(vel)
@@ -467,11 +474,13 @@ def snapshot_state(sim: SceneController) -> Dict[str, Any]:
         if not obj.enabled:
             continue
         shape = obj.shape
+        opacity = float(getattr(obj, "opacity", 1.0))
         entry: Dict[str, Any] = {
             "id": id(obj),
             "class": obj.__class__.__name__,
             "pos": [obj.location.x, obj.location.y, obj.location.z],
             "color": [obj.color.x, obj.color.y, obj.color.z],
+            "opacity": opacity,
             "static": not isinstance(obj, Mobile)
             or not getattr(obj, "physics_enabled", False),
         }
