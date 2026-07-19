@@ -8,7 +8,7 @@
   "objects": [
     {
       "type": "box", "static": true,
-      "pos": [0, -0.12, 0], "size": [16, 0.24, 10],
+      "pos": [0, -0.12, 0], "size": [28, 0.24, 18],
       "color": [0.28, 0.32, 0.3], "restitution": 0.35, "friction": 0.85
     },
 

@@ -198,26 +198,44 @@ def resolve_contacts_batch(
             if pen_raw > 0.0:
                 inv = inv_mass[ai] + inv_mass[bi]
                 if inv > 1e-12:
+                    vs_static = is_static[ai] or is_static[bi]
                     if pen_raw > 0.08:
-                        frac = 0.85
+                        frac = 0.95 if vs_static else 0.85
                     elif pen_raw > 0.04:
-                        frac = 0.55
+                        frac = 0.80 if vs_static else 0.55
                     elif pen_raw > 0.02:
-                        frac = 0.35
+                        frac = 0.60 if vs_static else 0.35
                     else:
-                        frac = 0.18 if position_only != 0 else 0.12
-                    floor = 0.4 if pen_raw > 0.03 else mscale
-                    if mscale > floor:
-                        floor = mscale
-                    frac *= floor
+                        # shallow: still push hard vs static floors (anti-tunnel)
+                        if position_only != 0:
+                            frac = 0.55 if vs_static else 0.18
+                        else:
+                            frac = 0.40 if vs_static else 0.12
+                    # Always honour manifold_scale (1/n_points). Overriding it with
+                    # a high floor made 4-foot floor manifolds apply ~3× correction
+                    # and, with a wrong-way normal past the slab midline, fired
+                    # bodies straight through the floor.
+                    if mscale < 1.0:
+                        frac *= mscale
+                    elif not vs_static and pen_raw <= 0.03:
+                        frac *= mscale
+                    if frac > 1.0:
+                        frac = 1.0
                     corr = frac * pen_raw / inv
+                    # Cap per-contact displacement so stacked multi-body
+                    # resolves cannot fire a body through a floor in one step.
+                    max_shift = 0.12 if vs_static else 0.08
                     if not is_static[ai]:
                         s = corr * inv_mass[ai]
+                        if s > max_shift:
+                            s = max_shift
                         pos[ai, 0] += nx * s
                         pos[ai, 1] += ny * s
                         pos[ai, 2] += nz * s
                     if not is_static[bi]:
                         s = corr * inv_mass[bi]
+                        if s > max_shift:
+                            s = max_shift
                         pos[bi, 0] -= nx * s
                         pos[bi, 1] -= ny * s
                         pos[bi, 2] -= nz * s
@@ -873,6 +891,14 @@ def find_contacts_packed(
                 pen, nx, ny, nz = _sat_box_box(pos, R, half, i, j)
                 if pen <= 0.0:
                     continue
+                # Floor-like statics: once a body crosses the slab midplane, SAT
+                # orients the normal the wrong way and separation pushes *into*
+                # the floor. Force mostly-vertical contacts so the dynamic body
+                # is always pushed toward the top face (tip-off still works —
+                # torque comes from edge contact points, not a side normal).
+                nx, ny, nz = _orient_floor_normal(
+                    pos, R, half, is_static, i, j, nx, ny, nz
+                )
                 max_pts = 4 if (is_static[i] or is_static[j]) else 3
                 count = _append_box_box_manifold(
                     pos, R, half, i, j, pen, nx, ny, nz, max_pts,
@@ -890,6 +916,64 @@ def find_contacts_packed(
                     out_a, out_b, out_n, out_p, out_pen, out_scale, count, max_m,
                 )
     return count
+
+
+@njit(cache=True)
+def _orient_floor_normal(
+    pos: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    is_static: np.ndarray,
+    ai: int,
+    bi: int,
+    nx: float,
+    ny: float,
+    nz: float,
+) -> Tuple[float, float, float]:
+    """
+    For floor-like static boxes (local +Y ≈ world up), ensure the contact
+    normal separates the *dynamic* body toward free space above the top face.
+
+    Convention: normal points from b toward a; a moves +n, b moves -n.
+    """
+    # identify static floor-like partner
+    if is_static[ai] and not is_static[bi]:
+        si, di = ai, bi
+        # dyn is b → moves -n; want -n ≈ +up ⇒ n · up < 0
+        want_n_dot_up_negative = True
+    elif is_static[bi] and not is_static[ai]:
+        si, di = bi, ai
+        # dyn is a → moves +n; want +n ≈ +up ⇒ n · up > 0
+        want_n_dot_up_negative = False
+    else:
+        return nx, ny, nz
+
+    upx, upy, upz = R[si, 0, 1], R[si, 1, 1], R[si, 2, 1]
+    if upy < 0.85:
+        return nx, ny, nz  # wall / steep ramp — leave SAT alone
+
+    # Only correct mostly-vertical contacts (side hits of thick pads stay SAT)
+    ndot = nx * upx + ny * upy + nz * upz
+    if ndot * ndot < 0.25:  # |cos| < 0.5
+        return nx, ny, nz
+
+    # Only when dyn COM is over the static footprint (edge hang keeps SAT tip)
+    dx = pos[di, 0] - pos[si, 0]
+    dy = pos[di, 1] - pos[si, 1]
+    dz = pos[di, 2] - pos[si, 2]
+    lx = R[si, 0, 0] * dx + R[si, 1, 0] * dy + R[si, 2, 0] * dz
+    lz = R[si, 0, 2] * dx + R[si, 1, 2] * dy + R[si, 2, 2] * dz
+    hx, hz = half[si, 0], half[si, 2]
+    if abs(lx) > hx or abs(lz) > hz:
+        return nx, ny, nz
+
+    if want_n_dot_up_negative:
+        if ndot > 0.0:
+            return -nx, -ny, -nz
+    else:
+        if ndot < 0.0:
+            return -nx, -ny, -nz
+    return nx, ny, nz
 
 
 @njit(cache=True)
@@ -978,30 +1062,137 @@ def _sphere_box_contact(
         pen = r - dist
         if pen <= 0.0:
             return count
-    # Contact stores a,b with normal from b toward a in our solver convention
-    # for sphere-box we want normal pointing from box toward sphere typically
-    # Original: sphere vs box returns Contact(sphere, box, normal) normal from closest to sphere
+    # Contact stores a,b with normal from b toward a in our solver convention.
+    # nx is from box surface toward sphere center (push sphere along +n).
     if sphere_is_a:
-        # a=sphere i, b=box j — normal from box toward sphere = nx
+        # a=sphere, b=box — sphere moves +n, so n should push sphere out
         out_a[count] = si
         out_b[count] = bi
         out_n[count, 0] = nx
         out_n[count, 1] = ny
         out_n[count, 2] = nz
     else:
-        # a=box i, b=sphere j in pair order — we passed sphere_is_a False with si=sphere, bi=box
-        # pair was box,sphere so out should be a=box bi, b=sphere si, normal from sphere to box = -n
+        # a=box, b=sphere — sphere moves -n, so store -nx so -n = push out
         out_a[count] = bi
         out_b[count] = si
         out_n[count, 0] = -nx
         out_n[count, 1] = -ny
         out_n[count, 2] = -nz
+
+    # Floor-like static box: if sphere center is over the footprint and the
+    # contact is mostly vertical, always push the sphere toward +static up
+    # (stops tunnel-through when center drops past the slab midplane).
+    upx, upy, upz = R[bi, 0, 1], R[bi, 1, 1], R[bi, 2, 1]
+    if upy >= 0.85 and abs(lx) <= hx and abs(lz) <= hz:
+        # direction that should push sphere along +up when applied to sphere
+        if sphere_is_a:
+            # sphere moves +out_n
+            nd = out_n[count, 0] * upx + out_n[count, 1] * upy + out_n[count, 2] * upz
+            if nd * nd >= 0.25 and nd < 0.0:
+                out_n[count, 0] = -out_n[count, 0]
+                out_n[count, 1] = -out_n[count, 1]
+                out_n[count, 2] = -out_n[count, 2]
+        else:
+            # sphere is b, moves -out_n; want -out_n · up > 0 ⇒ out_n · up < 0
+            nd = out_n[count, 0] * upx + out_n[count, 1] * upy + out_n[count, 2] * upz
+            if nd * nd >= 0.25 and nd > 0.0:
+                out_n[count, 0] = -out_n[count, 0]
+                out_n[count, 1] = -out_n[count, 1]
+                out_n[count, 2] = -out_n[count, 2]
+
     out_p[count, 0] = cwx
     out_p[count, 1] = cwy
     out_p[count, 2] = cwz
     out_pen[count] = pen
     out_scale[count] = 1.0
     return count + 1
+
+
+@njit(cache=True)
+def hard_depenetrate_static(
+    pos: np.ndarray,
+    vel: np.ndarray,
+    R: np.ndarray,
+    half: np.ndarray,
+    kind: np.ndarray,
+    radius: np.ndarray,
+    is_static: np.ndarray,
+) -> None:
+    """
+    Keep dynamic bodies from sinking through static *top* surfaces.
+
+    For each dynamic body over one or more floor-like footprints:
+      - If already near-resting on any of them (need ≈ 0), only micro-correct
+        shallow sinks on the nearest surface — never yank up to a higher step
+        whose footprint happens to overlap (stairs).
+      - If sunk through every nearby surface, lift by the *smallest* positive
+        need (nearest top face). No depth cap — multi-body shoves can bury a
+        box metres deep in one frame; COM over footprint still means "on pad".
+    Edge tip-off is preserved: COM past the rim → no footprint match.
+    """
+    n = pos.shape[0]
+    near_eps = 0.025
+    for di in range(n):
+        if is_static[di]:
+            continue
+
+        best_need = 1e30
+        best_si = -1
+        has_near_support = False
+        for si in range(n):
+            if not is_static[si] or kind[si] != KIND_BOX:
+                continue
+            if R[si, 1, 1] < 0.85:
+                continue
+            hx, hy, hz = half[si, 0], half[si, 1], half[si, 2]
+            dx = pos[di, 0] - pos[si, 0]
+            dy = pos[di, 1] - pos[si, 1]
+            dz = pos[di, 2] - pos[si, 2]
+            lx = R[si, 0, 0] * dx + R[si, 1, 0] * dy + R[si, 2, 0] * dz
+            ly = R[si, 0, 1] * dx + R[si, 1, 1] * dy + R[si, 2, 1] * dz
+            lz = R[si, 0, 2] * dx + R[si, 1, 2] * dy + R[si, 2, 2] * dz
+            # Strict COM footprint — preserves edge tip-off when COM past rim.
+            if abs(lx) > hx or abs(lz) > hz:
+                continue
+            # Accurate half-extent of dyn along static up (handles rotation)
+            if kind[di] == KIND_SPHERE:
+                e = radius[di]
+            else:
+                ux, uy, uz = R[si, 0, 1], R[si, 1, 1], R[si, 2, 1]
+                e = (
+                    half[di, 0]
+                    * abs(R[di, 0, 0] * ux + R[di, 1, 0] * uy + R[di, 2, 0] * uz)
+                    + half[di, 1]
+                    * abs(R[di, 0, 1] * ux + R[di, 1, 1] * uy + R[di, 2, 1] * uz)
+                    + half[di, 2]
+                    * abs(R[di, 0, 2] * ux + R[di, 1, 2] * uy + R[di, 2, 2] * uz)
+                )
+            need = (hy + e) - ly
+            # Resting on / slightly above this surface
+            if need <= near_eps:
+                if need > -0.05:
+                    has_near_support = True
+                continue
+            if need < best_need:
+                best_need = need
+                best_si = si
+
+        if best_si < 0:
+            continue
+        # With near support (e.g. on a lower stair), only fix shallow sinks on
+        # the nearest other surface — never a 0.5 m yank onto an upper tread.
+        if has_near_support and best_need > 0.15:
+            continue
+        si = best_si
+        ux, uy, uz = R[si, 0, 1], R[si, 1, 1], R[si, 2, 1]
+        pos[di, 0] += ux * best_need
+        pos[di, 1] += uy * best_need
+        pos[di, 2] += uz * best_need
+        vn = vel[di, 0] * ux + vel[di, 1] * uy + vel[di, 2] * uz
+        if vn < 0.0:
+            vel[di, 0] -= ux * vn
+            vel[di, 1] -= uy * vn
+            vel[di, 2] -= uz * vn
 
 
 def warmup() -> None:

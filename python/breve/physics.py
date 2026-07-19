@@ -231,7 +231,7 @@ class RigidBody:
         pz: float,
     ) -> None:
         """In-place impulse at world point — no temporary arrays."""
-        if self.static or self.inv_mass <= 0:
+        if self.static or self.inv_mass <= 0 or not self.awake:
             return
         im = self.inv_mass
         self.velocity[0] += ix * im
@@ -245,8 +245,9 @@ class RigidBody:
         self.angular_velocity[0] += Iw[0, 0] * tx + Iw[0, 1] * ty + Iw[0, 2] * tz
         self.angular_velocity[1] += Iw[1, 0] * tx + Iw[1, 1] * ty + Iw[1, 2] * tz
         self.angular_velocity[2] += Iw[2, 0] * tx + Iw[2, 1] * ty + Iw[2, 2] * tz
-        self.awake = True
-        self._sleep_frames = 0
+        # Do NOT reset _sleep_frames here — every resting contact applies tiny
+        # impulses each step, which was keeping sleep_frames stuck at 1 and
+        # boxes skating forever (~4s mark). Rest logic gates sleep on energy.
 
     def velocity_at_point(self, point: np.ndarray) -> np.ndarray:
         vx, vy, vz = self.velocity_at_xyz(
@@ -332,8 +333,8 @@ class PhysicsWorld:
         self._by_owner: dict = {}
         self.iterations: int = 6
         # Position-only passes after velocity solve (push deep overlaps apart).
-        # Keep low: each pass re-detects contacts (expensive); Numba path does 1.
-        self.position_iterations: int = 1
+        # Numba contact find is cheap — 2 passes kills residual floor sinks.
+        self.position_iterations: int = 2
         # Allow a little overlap without velocity bias (kills rest hop).
         self.slop: float = 0.006
         self.baumgarte: float = 0.15
@@ -494,6 +495,7 @@ class PhysicsWorld:
             KIND_BOX,
             KIND_SPHERE,
             find_contacts_packed,
+            hard_depenetrate_static,
             integrate_bodies,
             inv_inertia_world_batch,
             quat_to_R,
@@ -535,7 +537,10 @@ class PhysicsWorld:
             quat[i, 1] = b.orientation[1]
             quat[i, 2] = b.orientation[2]
             quat[i, 3] = b.orientation[3]
-            inv_mass[i] = 0.0 if b.static else b.inv_mass
+            # Asleep bodies act as immovable (infinite mass) until woken —
+            # stops gravity+contact bias from skating them across the floor.
+            frozen = b.static or not b.awake
+            inv_mass[i] = 0.0 if frozen else b.inv_mass
             inv_I_local[i, 0] = b.inv_inertia_local[0]
             inv_I_local[i, 1] = b.inv_inertia_local[1]
             inv_I_local[i, 2] = b.inv_inertia_local[2]
@@ -546,7 +551,7 @@ class PhysicsWorld:
             torque[i, 0] = b.torque[0]
             torque[i, 1] = b.torque[1]
             torque[i, 2] = b.torque[2]
-            is_static[i] = b.static
+            is_static[i] = frozen  # solver: sleepers ≡ static until woken
             awake[i] = b.awake
             restitution[i] = b.restitution
             friction[i] = b.friction
@@ -602,11 +607,40 @@ class PhysicsWorld:
         cpen = np.empty(max_m, dtype=np.float64)
         cmscale = np.empty(max_m, dtype=np.float64)
 
+        # Broadphase/contacts must see true static vs dynamic (not sleepers),
+        # so rebuild a real-static mask for finding; sleepers stay in pairs.
+        real_static = np.array([b.static for b in bodies], dtype=np.bool_)
         m = find_contacts_packed(
-            pos, R, half, kind, radius, is_static, broad_r,
+            pos, R, half, kind, radius, real_static, broad_r,
             ca, cb, cn, cp, cpen, cmscale,
         )
         last_m = m
+
+        # Wake sleepers hit by energetic awake bodies (or deep new overlaps).
+        # Low threshold so a tipping base re-awakens a frozen stack above it.
+        if m > 0:
+            wake_speed2 = 0.04 * 0.04
+            wake_spin2 = 0.15 * 0.15
+            for k in range(m):
+                i, j = int(ca[k]), int(cb[k])
+                if real_static[i] or real_static[j]:
+                    continue
+                si = float(vel[i, 0] ** 2 + vel[i, 1] ** 2 + vel[i, 2] ** 2)
+                sj = float(vel[j, 0] ** 2 + vel[j, 1] ** 2 + vel[j, 2] ** 2)
+                wi = float(omega[i, 0] ** 2 + omega[i, 1] ** 2 + omega[i, 2] ** 2)
+                wj = float(omega[j, 0] ** 2 + omega[j, 1] ** 2 + omega[j, 2] ** 2)
+                pen = float(cpen[k])
+                j_hot = awake[j] and (sj > wake_speed2 or wj > wake_spin2 or pen > 0.03)
+                i_hot = awake[i] and (si > wake_speed2 or wi > wake_spin2 or pen > 0.03)
+                if not awake[i] and j_hot:
+                    awake[i] = True
+                    inv_mass[i] = bodies[i].inv_mass
+                    is_static[i] = False
+                if not awake[j] and i_hot:
+                    awake[j] = True
+                    inv_mass[j] = bodies[j].inv_mass
+                    is_static[j] = False
+            inv_inertia_world_batch(R, inv_I_local, is_static, inv_I)
 
         if m > 0:
             resolve_contacts_batch(
@@ -616,10 +650,28 @@ class PhysicsWorld:
                 float(dt), float(self.max_bias), float(self.deep_bias),
                 0, int(self.iterations),
             )
+            def _hard_depen_awake() -> None:
+                # Don't move sleeping bodies (they are frozen until woken).
+                saved = []
+                for bi in range(n):
+                    if not awake[bi] and not real_static[bi]:
+                        saved.append(
+                            (bi, pos[bi, 0], pos[bi, 1], pos[bi, 2],
+                             vel[bi, 0], vel[bi, 1], vel[bi, 2])
+                        )
+                hard_depenetrate_static(
+                    pos, vel, R, half, kind, radius, real_static
+                )
+                for bi, px, py, pz, vx, vy, vz in saved:
+                    pos[bi, 0], pos[bi, 1], pos[bi, 2] = px, py, pz
+                    vel[bi, 0], vel[bi, 1], vel[bi, 2] = vx, vy, vz
+
+            # Lift bodies shoved into floors before position iterations.
+            _hard_depen_awake()
             # Position-only pass(es) with refreshed Numba contacts
             for _ in range(max(1, self.position_iterations)):
                 m2 = find_contacts_packed(
-                    pos, R, half, kind, radius, is_static, broad_r,
+                    pos, R, half, kind, radius, real_static, broad_r,
                     ca, cb, cn, cp, cpen, cmscale,
                 )
                 if m2 <= 0:
@@ -630,20 +682,54 @@ class PhysicsWorld:
                     ca[:m2], cb[:m2], cn[:m2], cp[:m2], cpen[:m2], cmscale[:m2],
                     float(self.slop), float(self.baumgarte), float(self.bounce_threshold),
                     float(dt), float(self.max_bias), float(self.deep_bias),
-                    1, 1,
+                    1, 2,
                 )
+                _hard_depen_awake()
+            # Final hard floor/step separation (anti-tunnel).
+            _hard_depen_awake()
+            m2 = find_contacts_packed(
+                pos, R, half, kind, radius, real_static, broad_r,
+                ca, cb, cn, cp, cpen, cmscale,
+            )
+            # Always refresh count — stale contacts kept sleepers "supported"
+            # and floating mid-air after a stack base fell out from under them.
+            last_m = m2
+        else:
+            # still run solid depenetration if no manifold contacts this frame
+            hard_depenetrate_static(
+                pos, vel, R, half, kind, radius, real_static
+            )
         m = last_m
 
-        # Unpack + rest (build lightweight support from contact indices)
+        # Unpack + rest. Dynamic *support* only when the partner can prop
+        # (COM below or contact normal carries weight) — not mere side contact.
         dyn_support = np.zeros(n, dtype=np.bool_)
+        static_support = np.zeros(n, dtype=np.bool_)
         in_contact = np.zeros(n, dtype=np.bool_)
+        support_pts: List[List[Tuple[float, float]]] = [[] for _ in range(n)]
         if m > 0:
             for k in range(m):
                 i, j = int(ca[k]), int(cb[k])
                 in_contact[i] = True
                 in_contact[j] = True
-                if not is_static[i] and not is_static[j]:
+                if real_static[i] and not real_static[j]:
+                    static_support[j] = True
+                elif real_static[j] and not real_static[i]:
+                    static_support[i] = True
+                # Contact points below a body's COM can carry its weight —
+                # they form the support hull for the stability/sleep gate.
+                cpx, cpy, cpz = float(cp[k, 0]), float(cp[k, 1]), float(cp[k, 2])
+                if not real_static[i] and cpy < float(pos[i, 1]):
+                    support_pts[i].append((cpx, cpz))
+                if not real_static[j] and cpy < float(pos[j, 1]):
+                    support_pts[j].append((cpx, cpz))
+                if real_static[i] or real_static[j]:
+                    continue
+                ny = float(cn[k, 1])  # normal from j toward i
+                # Significant under-support only (not same-layer side neighbors)
+                if pos[j, 1] < pos[i, 1] - 0.10 or ny > 0.55:
                     dyn_support[i] = True
+                if pos[i, 1] < pos[j, 1] - 0.10 or (-ny) > 0.55:
                     dyn_support[j] = True
 
         for i, body in enumerate(bodies):
@@ -660,10 +746,27 @@ class PhysicsWorld:
             body.orientation[1] = quat[i, 1]
             body.orientation[2] = quat[i, 2]
             body.orientation[3] = quat[i, 3]
+            body.awake = bool(awake[i])
             body.force[:] = 0.0
             body.torque[:] = 0.0
             body.invalidate_cache()
             if body.static:
+                continue
+            stable = _com_over_support_xz(
+                float(pos[i, 0]),
+                float(pos[i, 2]),
+                support_pts[i],
+                _support_margin(body),
+            )
+            if not body.awake:
+                # Stay frozen only while supported *and* stably so — a sleeper
+                # whose base slid away (corner-only contact) must wake and tip.
+                if (not static_support[i] and not dyn_support[i]) or not stable:
+                    body.awake = True
+                    body._sleep_frames = 0
+                else:
+                    body.velocity[:] = 0.0
+                    body.angular_velocity[:] = 0.0
                 continue
             if not in_contact[i]:
                 body._sleep_frames = 0
@@ -673,6 +776,8 @@ class PhysicsWorld:
                 self.sleep_frames_needed,
                 dt,
                 has_dynamic_support=bool(dyn_support[i]),
+                has_static_support=bool(static_support[i]),
+                support_stable=stable,
             )
 
     def _step_python(self, dt: float) -> None:
@@ -773,17 +878,44 @@ class PhysicsWorld:
                     position_only=True,
                 )
 
+        # Hard floor/step separation (anti-tunnel) for pure-Python path.
+        _hard_depenetrate_static_py(self.bodies)
+
         # Contact damping + rest zero. Free-fall (not in contact) is never damped.
         support = _contact_support_map(contacts)
+        support_pts = _support_points_map(contacts)
         for body in self.bodies:
             if body.static:
                 continue
             info = support.get(id(body))
             if info is None:
+                if not body.awake:
+                    body.awake = True
                 body._sleep_frames = 0
                 continue
+            has_dyn, has_static = info
+            stable = _com_over_support_xz(
+                float(body.position[0]),
+                float(body.position[2]),
+                support_pts.get(id(body), []),
+                _support_margin(body),
+            )
+            if not body.awake:
+                # Frozen only while stably supported (matches Numba path).
+                if (not has_static and not has_dyn) or not stable:
+                    body.awake = True
+                    body._sleep_frames = 0
+                else:
+                    body.velocity[:] = 0.0
+                    body.angular_velocity[:] = 0.0
+                    continue
             _apply_contact_rest(
-                body, self.sleep_frames_needed, dt, has_dynamic_support=info[0]
+                body,
+                self.sleep_frames_needed,
+                dt,
+                has_dynamic_support=has_dyn,
+                has_static_support=has_static,
+                support_stable=stable,
             )
 
     def _find_contacts(self) -> List[Contact]:
@@ -1059,6 +1191,107 @@ def _corner_penetration(box: RigidBody, point: np.ndarray) -> Optional[float]:
     return min(dx, dy, dz)
 
 
+def _hard_depenetrate_static_py(bodies: List[RigidBody]) -> None:
+    """Python mirror of hard_depenetrate_static (nearest floor top-face push)."""
+    statics = [
+        b
+        for b in bodies
+        if b.static
+        and b.collider is not None
+        and b.collider.kind == ShapeKind.BOX
+    ]
+    near_eps = 0.025
+    for di in bodies:
+        if di.static or di.collider is None:
+            continue
+        best_need = 1e30
+        best_up = None
+        has_near_support = False
+        for si in statics:
+            R = si.rotation_matrix()
+            up = R[:, 1]
+            if float(up[1]) < 0.85:
+                continue
+            hx, hy, hz = (
+                float(si.collider.data[0]),  # type: ignore[index]
+                float(si.collider.data[1]),  # type: ignore[index]
+                float(si.collider.data[2]),  # type: ignore[index]
+            )
+            local = R.T @ (di.position - si.position)
+            lx, ly, lz = float(local[0]), float(local[1]), float(local[2])
+            if abs(lx) > hx or abs(lz) > hz:
+                continue
+            if di.collider.kind == ShapeKind.SPHERE:
+                e = float(di.collider.data[0])  # type: ignore[index]
+            else:
+                Rd = di.rotation_matrix()
+                hd = di.collider.data
+                e = (
+                    float(hd[0]) * abs(float(np.dot(Rd[:, 0], up)))  # type: ignore[index]
+                    + float(hd[1]) * abs(float(np.dot(Rd[:, 1], up)))  # type: ignore[index]
+                    + float(hd[2]) * abs(float(np.dot(Rd[:, 2], up)))  # type: ignore[index]
+                )
+            need = (hy + e) - ly
+            if need <= near_eps:
+                if need > -0.05:
+                    has_near_support = True
+                continue
+            if need < best_need:
+                best_need = need
+                best_up = up
+        if best_up is None:
+            continue
+        if has_near_support and best_need > 0.15:
+            continue
+        di.position[0] += float(best_up[0]) * best_need
+        di.position[1] += float(best_up[1]) * best_need
+        di.position[2] += float(best_up[2]) * best_need
+        di.invalidate_cache()
+        vn = float(
+            di.velocity[0] * best_up[0]
+            + di.velocity[1] * best_up[1]
+            + di.velocity[2] * best_up[2]
+        )
+        if vn < 0.0:
+            di.velocity[0] -= float(best_up[0]) * vn
+            di.velocity[1] -= float(best_up[1]) * vn
+            di.velocity[2] -= float(best_up[2]) * vn
+
+
+def _orient_floor_normal_py(a: RigidBody, b: RigidBody, n: np.ndarray) -> np.ndarray:
+    """
+    Floor-like statics: past the slab midplane SAT can point the normal the
+    wrong way. Force mostly-vertical contacts so the dynamic body is pushed
+    toward the top face when its COM is over the footprint.
+    """
+    if a.static and not b.static:
+        static, dyn = a, b
+        want_n_dot_up_negative = True
+    elif b.static and not a.static:
+        static, dyn = b, a
+        want_n_dot_up_negative = False
+    else:
+        return n
+    if static.collider is None or static.collider.kind != ShapeKind.BOX:
+        return n
+    R = static.rotation_matrix()
+    up = R[:, 1]
+    if float(up[1]) < 0.85:
+        return n
+    ndot = float(n[0] * up[0] + n[1] * up[1] + n[2] * up[2])
+    if ndot * ndot < 0.25:
+        return n
+    half = static.collider.data
+    local = R.T @ (dyn.position - static.position)
+    if abs(float(local[0])) > float(half[0]) or abs(float(local[2])) > float(half[2]):
+        return n
+    if want_n_dot_up_negative and ndot > 0.0:
+        return -n
+    if not want_n_dot_up_negative and ndot < 0.0:
+        return -n
+    return n
+
+
 def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
     """
     Multi-point box-box manifold.
@@ -1072,6 +1305,7 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
     if sat is None:
         return []
     n, min_pen = sat
+    n = _orient_floor_normal_py(a, b, n)
 
     max_pts = 4 if (a.static or b.static) else 3
 
@@ -1134,15 +1368,9 @@ def _obb_obb_manifold(a: RigidBody, b: RigidBody) -> List[Contact]:
     ]
 
 
-def _orientation_face_stable(body: RigidBody, threshold: float = 0.90) -> bool:
-    """
-    True if a face is nearly horizontal (stable resting pose).
-
-    Edge/corner poses have no local axis nearly aligned with world-up, so we
-    must NOT sleep them — gravity + offset contact torque needs free spin to tip.
-    """
+def _orientation_face_stable(body: RigidBody, threshold: float = 0.92) -> bool:
+    """True if a local face axis is nearly world-up (for diagnostics / tests)."""
     R = body.rotation_matrix()
-    # world-Y components of the three local axes
     for i in range(3):
         if abs(float(R[1, i])) >= threshold:
             return True
@@ -1150,10 +1378,7 @@ def _orientation_face_stable(body: RigidBody, threshold: float = 0.90) -> bool:
 
 
 def _nearest_up_axis(body: RigidBody) -> Tuple[int, float, float, float, float]:
-    """
-    Local axis index closest to world-up, signed alignment, and that axis in world.
-    Returns (axis_index, abs_dot, ax, ay, az) with ay >= 0 (flipped if needed).
-    """
+    """Local axis closest to world-up: (index, |dot|, ax, ay, az) with ay>=0."""
     R = body.rotation_matrix()
     best_i, best_abs = 0, -1.0
     for i in range(3):
@@ -1168,12 +1393,7 @@ def _nearest_up_axis(body: RigidBody) -> Tuple[int, float, float, float, float]:
 
 
 def _contact_support_map(contacts: List[Contact]) -> dict:
-    """
-    body_id -> (has_dynamic_partner, has_static_partner).
-
-    Dynamic partners mean other non-static bodies help hold this one (angled
-    stacks). Static-only means floor/walls alone — free to tip on edges.
-    """
+    """body_id -> (has_dynamic_partner, has_static_partner)."""
     out: dict = {}
     for c in contacts:
         for body, other in ((c.a, c.b), (c.b, c.a)):
@@ -1189,22 +1409,108 @@ def _contact_support_map(contacts: List[Contact]) -> dict:
     return out
 
 
-def _nudge_unstable_tip(body: RigidBody, dt: float) -> None:
-    """
-    Break metastable edge/corner equilibria on *static-only* support.
+def _support_points_map(contacts: List[Contact]) -> dict:
+    """body_id -> [(x, z), ...] of contact points below that body's COM."""
+    out: dict = {}
+    for c in contacts:
+        px, py, pz = float(c.point[0]), float(c.point[1]), float(c.point[2])
+        for body in (c.a, c.b):
+            if body.static:
+                continue
+            if py < float(body.position[1]):
+                out.setdefault(id(body), []).append((px, pz))
+    return out
 
-    Never use when other dynamic bodies are in contact — they can legitimately
-    prop a box at an angle.
+
+# COM must project this close to the support hull to count as balanced.
+# Kept tight: at 0.015 a half-metre cube slept ~2° off edge-balance, which
+# still reads as "frozen mid-tip". Scaled down further for small bodies.
+SUPPORT_MARGIN = 0.006
+
+
+def _support_margin(body: RigidBody) -> float:
+    return min(SUPPORT_MARGIN, 0.05 * max(body.bounding_radius(), 1e-3))
+
+
+def _dist_point_segment_xz(
+    px: float, pz: float, a: Tuple[float, float], b: Tuple[float, float]
+) -> float:
+    ax, az = a
+    bx, bz = b
+    dx, dz = bx - ax, bz - az
+    L2 = dx * dx + dz * dz
+    if L2 < 1e-18:
+        ex, ez = px - ax, pz - az
+        return (ex * ex + ez * ez) ** 0.5
+    t = ((px - ax) * dx + (pz - az) * dz) / L2
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    ex, ez = px - (ax + t * dx), pz - (az + t * dz)
+    return (ex * ex + ez * ez) ** 0.5
+
+
+def _convex_hull_xz(pts: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Monotone-chain hull, CCW. Input is tiny (≤ ~8 points)."""
+    uniq = sorted(set(pts))
+    if len(uniq) <= 2:
+        return uniq
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: List[Tuple[float, float]] = []
+    for p in uniq:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: List[Tuple[float, float]] = []
+    for p in reversed(uniq):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _com_over_support_xz(
+    px: float,
+    pz: float,
+    pts: List[Tuple[float, float]],
+    margin: float = SUPPORT_MARGIN,
+) -> bool:
     """
-    if body.static or body.inv_mass <= 0:
-        return
-    _i, align, ax, ay, az = _nearest_up_axis(body)
-    if align >= 0.90:
-        return
-    mis = 1.0 - align
-    strength = 12.0 * mis * mis
-    body.angular_velocity[0] += (-az) * strength * dt
-    body.angular_velocity[2] += ax * strength * dt
+    True if gravity through the COM is carried by the contact set: the COM's
+    horizontal projection lies inside (or within `margin` of) the convex hull
+    of the support points. Corner contact → point; edge → segment; face → poly.
+    """
+    n = len(pts)
+    if n == 0:
+        return False
+    if n == 1:
+        dx, dz = px - pts[0][0], pz - pts[0][1]
+        return dx * dx + dz * dz <= margin * margin
+    hull = _convex_hull_xz(pts)
+    if len(hull) == 1:
+        dx, dz = px - hull[0][0], pz - hull[0][1]
+        return dx * dx + dz * dz <= margin * margin
+    if len(hull) == 2:
+        return _dist_point_segment_xz(px, pz, hull[0], hull[1]) <= margin
+    inside = True
+    hn = len(hull)
+    for i in range(hn):
+        x1, z1 = hull[i]
+        x2, z2 = hull[(i + 1) % hn]
+        if (x2 - x1) * (pz - z1) - (z2 - z1) * (px - x1) < 0.0:
+            inside = False
+            break
+    if inside:
+        return True
+    d = min(
+        _dist_point_segment_xz(px, pz, hull[i], hull[(i + 1) % hn])
+        for i in range(hn)
+    )
+    return d <= margin
 
 
 def _apply_contact_rest(
@@ -1213,14 +1519,23 @@ def _apply_contact_rest(
     dt: float = 1.0 / 60.0,
     *,
     has_dynamic_support: bool = False,
+    has_static_support: bool = False,
+    support_stable: bool = True,
 ) -> None:
     """
-    Soft rest damping for bodies in contact.
+    Natural rest only — no tip nudges, no face snaps, no forced poses.
 
-    - Dynamic support: sleep when nearly still at any angle (collisions hold pose).
-    - Static-only + face flat: normal rest sleep.
-    - Static-only + edge/corner: tip nudge so lone debris does not freeze mid-tip.
+    Gravity + contacts do the tipping. A body may only rest-damp and sleep
+    when its support configuration is *stable* (COM over the contact hull —
+    see _com_over_support_xz). A cube balanced on an unsupported corner or
+    edge stays awake and undamped so gravity torque finishes the tip.
+    Truly floating bodies never sleep.
     """
+    del dt
+    if not has_static_support and not has_dynamic_support:
+        body._sleep_frames = 0
+        return
+
     vx, vy, vz = (
         float(body.velocity[0]),
         float(body.velocity[1]),
@@ -1233,55 +1548,50 @@ def _apply_contact_rest(
     )
     speed = (vx * vx + vy * vy + vz * vz) ** 0.5
     spin = (wx * wx + wy * wy + wz * wz) ** 0.5
-    face_stable = _orientation_face_stable(body)
 
-    # Multi-body contact: allow rest at odd angles when energy is low
-    if has_dynamic_support:
-        if speed < 0.40 and spin < 1.0:
-            body.velocity[0] *= 0.88
-            body.velocity[1] *= 0.88
-            body.velocity[2] *= 0.88
-            body.angular_velocity[0] *= 0.85
-            body.angular_velocity[1] *= 0.85
-            body.angular_velocity[2] *= 0.85
-            speed *= 0.88
-            spin *= 0.85
-        if speed < 0.14 and spin < 0.30:
+    if not support_stable:
+        # Gravity torque is unresolved: no artificial damping (it stalls the
+        # tip below the sleep threshold — the frozen-on-a-corner bug) and no
+        # normal sleep. Safety valve for poses numerics call unstable but
+        # with negligible residual torque: a long truly-quiescent window.
+        if speed < 0.05 and spin < 0.10:
             body._sleep_frames += 1
-            if body._sleep_frames >= sleep_frames_needed:
+            if body._sleep_frames >= 40:
                 body.velocity[:] = 0.0
                 body.angular_velocity[:] = 0.0
+                body.awake = False
         else:
             body._sleep_frames = 0
         return
 
-    if face_stable:
-        if speed < 0.35 and spin < 0.8:
-            body.velocity[0] *= 0.85
-            body.velocity[1] *= 0.85
-            body.velocity[2] *= 0.85
-            body.angular_velocity[0] *= 0.78
-            body.angular_velocity[1] *= 0.78
-            body.angular_velocity[2] *= 0.78
-            speed *= 0.85
-            spin *= 0.78
-        if speed < 0.12 and spin < 0.25:
-            body._sleep_frames += 1
-            if body._sleep_frames >= sleep_frames_needed:
-                body.velocity[:] = 0.0
-                body.angular_velocity[:] = 0.0
-        else:
-            body._sleep_frames = 0
-        return
+    # Mild damping when slow (solver chatter + residual roll) — not a tip force
+    if speed < 0.50 and spin < 1.5:
+        body.velocity[0] *= 0.85
+        body.velocity[1] *= 0.90
+        body.velocity[2] *= 0.85
+        body.angular_velocity[0] *= 0.82
+        body.angular_velocity[1] *= 0.82
+        body.angular_velocity[2] *= 0.82
+        speed = (
+            float(body.velocity[0]) ** 2
+            + float(body.velocity[1]) ** 2
+            + float(body.velocity[2]) ** 2
+        ) ** 0.5
+        spin = (
+            float(body.angular_velocity[0]) ** 2
+            + float(body.angular_velocity[1]) ** 2
+            + float(body.angular_velocity[2]) ** 2
+        ) ** 0.5
 
-    # Static-only edge/corner: free to tip; nudge so perfect balance falls
-    body._sleep_frames = 0
-    if speed < 0.35:
-        body.velocity[0] *= 0.98
-        body.velocity[1] *= 0.98
-        body.velocity[2] *= 0.98
-    if speed < 0.45 and spin < 2.5:
-        _nudge_unstable_tip(body, dt)
+    # Stack chatter often leaves spin ~0.05–0.20 forever — allow sleep there
+    if speed < 0.12 and spin < 0.35:
+        body._sleep_frames += 1
+        if body._sleep_frames >= max(3, sleep_frames_needed):
+            body.velocity[:] = 0.0
+            body.angular_velocity[:] = 0.0
+            body.awake = False
+    else:
+        body._sleep_frames = 0
 
 
 def _resolve_contact(
@@ -1298,6 +1608,10 @@ def _resolve_contact(
     nx, ny, nz = float(c.normal[0]), float(c.normal[1]), float(c.normal[2])
     px, py, pz = float(c.point[0]), float(c.point[1]), float(c.point[2])
 
+    # Asleep bodies are immovable until woken (matches Numba frozen mass).
+    im_a = 0.0 if (a.static or not a.awake) else a.inv_mass
+    im_b = 0.0 if (b.static or not b.awake) else b.inv_mass
+
     pen_raw = c.penetration - slop
     if pen_raw < 0.0:
         pen_raw = 0.0
@@ -1305,30 +1619,49 @@ def _resolve_contact(
 
     # --- position projection (also used alone in position_iterations) ---
     if pen_raw > 0.0:
-        inv = a.inv_mass + b.inv_mass
+        inv = im_a + im_b
         if inv > 1e-12:
-            # Nonlinear: shallow rest barely moves; deep piles push hard.
+            vs_static = a.static or b.static or (not a.awake) or (not b.awake)
             if pen_raw > 0.08:
-                frac = 0.85
+                frac = 0.95 if vs_static else 0.85
             elif pen_raw > 0.04:
-                frac = 0.55
+                frac = 0.80 if vs_static else 0.55
             elif pen_raw > 0.02:
-                frac = 0.35
+                frac = 0.60 if vs_static else 0.35
             else:
-                frac = 0.18 if position_only else 0.12
-            # Multi-point: share correction but never starve deep contacts.
-            frac *= max(mscale, 0.4 if pen_raw > 0.03 else mscale)
+                frac = (0.55 if vs_static else 0.18) if position_only else (
+                    0.40 if vs_static else 0.12
+                )
+            # Honour manifold_scale (1/n_points). A high static floor override
+            # made multi-foot floor contacts over-correct and tunnel bodies.
+            if mscale < 1.0:
+                frac *= mscale
+            elif not vs_static and pen_raw <= 0.03:
+                frac *= mscale
+            frac = min(1.0, frac)
             corr = frac * pen_raw / inv
-            if not a.static:
-                s = corr * a.inv_mass
+            max_shift = 0.12 if vs_static else 0.08
+            if im_a > 0.0:
+                s = min(corr * im_a, max_shift)
                 a.position[0] += nx * s
                 a.position[1] += ny * s
                 a.position[2] += nz * s
-            if not b.static:
-                s = corr * b.inv_mass
+            if im_b > 0.0:
+                s = min(corr * im_b, max_shift)
                 b.position[0] -= nx * s
                 b.position[1] -= ny * s
                 b.position[2] -= nz * s
+            if vs_static and position_only and pen_raw > slop * 2:
+                pen2 = min(pen_raw * (1.0 - frac), max_shift)
+                if pen2 > 0.0:
+                    if im_a <= 0.0 and im_b > 0.0:
+                        b.position[0] -= nx * pen2
+                        b.position[1] -= ny * pen2
+                        b.position[2] -= nz * pen2
+                    elif im_b <= 0.0 and im_a > 0.0:
+                        a.position[0] += nx * pen2
+                        a.position[1] += ny * pen2
+                        a.position[2] += nz * pen2
 
     if position_only:
         return
@@ -1346,12 +1679,9 @@ def _resolve_contact(
     rby = py - float(b.position[1])
     rbz = pz - float(b.position[2])
 
-    denom = (
-        a.inv_mass
-        + b.inv_mass
-        + a.angular_denom_xyz(rax, ray, raz, nx, ny, nz)
-        + b.angular_denom_xyz(rbx, rby, rbz, nx, ny, nz)
-    )
+    ang_a = 0.0 if im_a <= 0.0 else a.angular_denom_xyz(rax, ray, raz, nx, ny, nz)
+    ang_b = 0.0 if im_b <= 0.0 else b.angular_denom_xyz(rbx, rby, rbz, nx, ny, nz)
+    denom = im_a + im_b + ang_a + ang_b
     if denom <= 1e-12:
         return
 
@@ -1386,8 +1716,10 @@ def _resolve_contact(
     if j > 50.0:
         j = 50.0
     if j > 0.0:
-        a.apply_impulse_xyz(nx * j, ny * j, nz * j, px, py, pz)
-        b.apply_impulse_xyz(-nx * j, -ny * j, -nz * j, px, py, pz)
+        if im_a > 0.0:
+            a.apply_impulse_xyz(nx * j, ny * j, nz * j, px, py, pz)
+        if im_b > 0.0:
+            b.apply_impulse_xyz(-nx * j, -ny * j, -nz * j, px, py, pz)
 
     # Friction
     vax, vay, vaz = a.velocity_at_xyz(px, py, pz)
@@ -1399,12 +1731,9 @@ def _resolve_contact(
     if tlen > 1e-5:
         inv_t = 1.0 / tlen
         thx, thy, thz = tx * inv_t, ty * inv_t, tz * inv_t
-        denom_t = (
-            a.inv_mass
-            + b.inv_mass
-            + a.angular_denom_xyz(rax, ray, raz, thx, thy, thz)
-            + b.angular_denom_xyz(rbx, rby, rbz, thx, thy, thz)
-        )
+        ang_ta = 0.0 if im_a <= 0.0 else a.angular_denom_xyz(rax, ray, raz, thx, thy, thz)
+        ang_tb = 0.0 if im_b <= 0.0 else b.angular_denom_xyz(rbx, rby, rbz, thx, thy, thz)
+        denom_t = im_a + im_b + ang_ta + ang_tb
         if denom_t > 1e-12:
             jt = -(rvx * thx + rvy * thy + rvz * thz) / denom_t
             mu = (a.friction + b.friction) * 0.5
@@ -1421,5 +1750,7 @@ def _resolve_contact(
                 jt = j_cap
             elif jt < -j_cap:
                 jt = -j_cap
-            a.apply_impulse_xyz(thx * jt, thy * jt, thz * jt, px, py, pz)
-            b.apply_impulse_xyz(-thx * jt, -thy * jt, -thz * jt, px, py, pz)
+            if im_a > 0.0:
+                a.apply_impulse_xyz(thx * jt, thy * jt, thz * jt, px, py, pz)
+            if im_b > 0.0:
+                b.apply_impulse_xyz(-thx * jt, -thy * jt, -thz * jt, px, py, pz)

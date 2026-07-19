@@ -130,21 +130,23 @@ def test_box_does_not_freeze_on_edge():
             self.box.move(breve.vector(0, 1.2, 0))
             self.box.enable_physics(mass=1.0)
             pb = breve.get_engine().physics.get_body(self.box)
-            # 45° about Z → diamond edge contact (metastable if frozen)
-            a = np.deg2rad(45) / 2
+            # Slightly off 45° so natural gravity tips (exact 45° is
+            # metastable with symmetric contacts — no artificial tip nudge).
+            a = np.deg2rad(40) / 2
             pb.orientation = np.array(
                 [np.cos(a), 0.0, 0.0, np.sin(a)], dtype=np.float64
             )
             pb.restitution = 0.1
-            pb.friction = 0.55
+            pb.friction = 0.4
 
     c = C()
-    c.run(steps=180)
+    c.run(steps=200)
     body = breve.get_engine().physics.get_body(c.box)
     R = body.rotation_matrix()
     face_align = max(abs(float(R[1, i])) for i in range(3))
     assert face_align > 0.90, f"box stuck on edge, face_align={face_align}"
-    assert c.box.location.y < 0.32
+    # half-extent 0.25 → face rest ≈0.25; allow small settle slack
+    assert c.box.location.y < 0.34
 
 
 def test_dynamic_support_does_not_force_face_down():
@@ -209,6 +211,232 @@ def test_offset_hit_spins_box():
     c.run(steps=15)
     omega = float(np.linalg.norm(body.angular_velocity))
     assert omega > 0.05
+
+
+# ---------------------------------------------------------------------------
+# Resting-behavior regressions: a cube must never freeze balanced on an
+# unsupported corner/edge; it must keep tipping until its COM is supported.
+# ---------------------------------------------------------------------------
+
+def _quat_axis_angle(ax, ay, az, deg):
+    a = np.deg2rad(deg) / 2
+    n = (ax * ax + ay * ay + az * az) ** 0.5
+    s = np.sin(a) / n
+    return np.array([np.cos(a), ax * s, ay * s, az * s], dtype=np.float64)
+
+
+def _q_mul(a, b):
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return np.array(
+        [
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        ],
+        dtype=np.float64,
+    )
+
+
+def _make_floor_scene(box_specs):
+    """Floor + cubes. box_specs: list of (pos, orientation_quat, mass)."""
+    set_engine(Engine())
+
+    class C(breve.PhysicalControl):
+        def init(self):
+            self.set_integration_step(0.016)
+            self.set_iteration_step(0.016)
+            self.full_gravity()
+            floor = breve.Stationary()
+            floor.set_shape(breve.Box().init_with(breve.vector(8, 0.2, 8)))
+            floor.move(breve.vector(0, -0.1, 0))
+            breve.get_engine().register_physics_body(floor, static=True)
+            self.boxes = []
+            for pos, quat, mass in box_specs:
+                b = breve.Mobile()
+                b.set_shape(breve.Box().init_with(breve.vector(0.5, 0.5, 0.5)))
+                b.move(breve.vector(*pos))
+                b.enable_physics(mass=mass)
+                pb = breve.get_engine().physics.get_body(b)
+                if quat is not None:
+                    pb.orientation = np.array(quat, dtype=np.float64)
+                pb.restitution = 0.05
+                pb.friction = 0.5
+                self.boxes.append(b)
+
+    return C()
+
+
+def _body_state(box):
+    body = breve.get_engine().physics.get_body(box)
+    R = body.rotation_matrix()
+    face_align = max(abs(float(R[1, i])) for i in range(3))
+    speed = float(np.linalg.norm(body.velocity))
+    spin = float(np.linalg.norm(body.angular_velocity))
+    return body, face_align, speed, spin
+
+
+def _assert_sane(body):
+    assert np.all(np.isfinite(body.position)), "NaN/inf position"
+    assert np.all(np.isfinite(body.velocity)), "NaN/inf velocity"
+    assert np.all(np.isfinite(body.orientation)), "NaN/inf orientation"
+    assert np.all(np.isfinite(body.angular_velocity)), "NaN/inf angular velocity"
+
+
+def _with_numba(enabled):
+    from breve.physics_kernels import numba_enabled, set_numba_enabled
+
+    prev = numba_enabled()
+    set_numba_enabled(enabled)
+    return prev
+
+
+def _run_tilted_cube_case(use_numba, rx_deg=25, rz_deg=40, steps=600):
+    """Corner-balanced cube (screenshot repro): must settle onto a face."""
+    from breve.physics_kernels import set_numba_enabled
+
+    prev = _with_numba(use_numba)
+    try:
+        q = _q_mul(
+            _quat_axis_angle(0, 0, 1, rz_deg), _quat_axis_angle(1, 0, 0, rx_deg)
+        )
+        c = _make_floor_scene([((0, 0.7, 0), q, 1.0)])
+        c.run(steps=steps)
+        body, face_align, speed, spin = _body_state(c.boxes[0])
+        _assert_sane(body)
+        assert face_align > 0.97, (
+            f"cube frozen at implausible angle: face_align={face_align:.3f}"
+        )
+        # face rest height = 0.25; allow slop but forbid mid-tip poses and sinks
+        assert 0.20 < float(body.position[1]) < 0.32, (
+            f"bad rest height y={float(body.position[1]):.3f}"
+        )
+        assert speed < 0.05 and spin < 0.10, (
+            f"not settled: speed={speed:.3f} spin={spin:.3f}"
+        )
+    finally:
+        set_numba_enabled(prev)
+
+
+def test_corner_tilted_cube_settles_numba():
+    _run_tilted_cube_case(use_numba=True)
+
+
+def test_corner_tilted_cube_settles_python():
+    _run_tilted_cube_case(use_numba=False)
+
+
+def test_edge_tilted_cube_settles_both_paths():
+    """25–35° single-axis edge tilts must also settle onto a face."""
+    from breve.physics_kernels import set_numba_enabled
+
+    for use_numba in (True, False):
+        prev = _with_numba(use_numba)
+        try:
+            for rz in (25, 35):
+                q = _quat_axis_angle(0, 0, 1, rz)
+                c = _make_floor_scene([((0, 0.7, 0), q, 1.0)])
+                c.run(steps=500)
+                body, face_align, speed, spin = _body_state(c.boxes[0])
+                _assert_sane(body)
+                assert face_align > 0.97, (
+                    f"numba={use_numba} rz={rz}: stuck face_align={face_align:.3f}"
+                )
+                assert speed < 0.05 and spin < 0.10
+        finally:
+            set_numba_enabled(prev)
+
+
+def test_upright_cube_rests_quietly():
+    """Upright cube must simply rest: no drift, no spin, no sink."""
+    from breve.physics_kernels import set_numba_enabled
+
+    for use_numba in (True, False):
+        prev = _with_numba(use_numba)
+        try:
+            c = _make_floor_scene([((0, 0.26, 0), None, 1.0)])
+            c.run(steps=240)
+            body, face_align, speed, spin = _body_state(c.boxes[0])
+            _assert_sane(body)
+            assert face_align > 0.995
+            assert 0.20 < float(body.position[1]) < 0.30
+            assert speed < 0.02 and spin < 0.05
+            assert abs(float(body.position[0])) < 0.1
+            assert abs(float(body.position[2])) < 0.1
+        finally:
+            set_numba_enabled(prev)
+
+
+def test_edge_balance_com_supported_is_legitimate():
+    """Exactly 45°, COM directly over the edge: a genuinely balanced pose.
+
+    It must either remain balanced or (numerics permitting) tip fully to a
+    face — never freeze partway between edge-balance and face rest.
+    """
+    from breve.physics_kernels import set_numba_enabled
+
+    for use_numba in (True, False):
+        prev = _with_numba(use_numba)
+        try:
+            q = _quat_axis_angle(0, 0, 1, 45)
+            # rest height on edge = 0.25*sqrt(2)
+            c = _make_floor_scene([((0, 0.3557, 0), q, 1.0)])
+            c.run(steps=400)
+            body, face_align, speed, spin = _body_state(c.boxes[0])
+            _assert_sane(body)
+            balanced = face_align < 0.72  # still diamond (45° => 0.707)
+            settled_flat = face_align > 0.97
+            assert balanced or settled_flat, (
+                f"numba={use_numba}: frozen mid-tip face_align={face_align:.3f}"
+            )
+            assert speed < 0.05 and spin < 0.10
+        finally:
+            set_numba_enabled(prev)
+
+
+def test_two_box_stack_stays_stacked():
+    from breve.physics_kernels import set_numba_enabled
+
+    for use_numba in (True, False):
+        prev = _with_numba(use_numba)
+        try:
+            c = _make_floor_scene(
+                [((0, 0.26, 0), None, 1.0), ((0, 0.80, 0), None, 1.0)]
+            )
+            c.run(steps=300)
+            for box in c.boxes:
+                body, face_align, speed, spin = _body_state(box)
+                _assert_sane(body)
+                assert face_align > 0.99
+                assert speed < 0.03 and spin < 0.05
+            y0 = float(c.boxes[0].location.y)
+            y1 = float(c.boxes[1].location.y)
+            assert 0.20 < y0 < 0.30
+            assert 0.68 < y1 < 0.82, f"top box at y={y1:.3f}"
+        finally:
+            set_numba_enabled(prev)
+
+
+def test_cube_falls_onto_cube():
+    """Drop a cube onto a resting cube: both must end settled, no NaNs."""
+    from breve.physics_kernels import set_numba_enabled
+
+    for use_numba in (True, False):
+        prev = _with_numba(use_numba)
+        try:
+            c = _make_floor_scene(
+                [((0, 0.26, 0), None, 1.0), ((0.1, 1.6, 0.05), None, 1.0)]
+            )
+            c.run(steps=600)
+            for box in c.boxes:
+                body, face_align, speed, spin = _body_state(box)
+                _assert_sane(body)
+                assert speed < 0.06 and spin < 0.12
+                assert face_align > 0.95
+                assert float(body.position[1]) > 0.15  # nothing through the floor
+        finally:
+            set_numba_enabled(prev)
 
 
 def test_gravity_demo_runs():

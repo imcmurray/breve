@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0] — 2026-07-18
+
+### Physics — natural resting behavior
+- **Boxes no longer freeze balanced on a corner or edge.** Sleeping now
+  requires a *stable support configuration*: the COM's gravity projection must
+  lie inside the convex hull of the body's supporting contact points
+  (corner → point, edge → segment, face → polygon). An unsupported tilt keeps
+  tipping under gravity until it rests on a face; a genuinely balanced edge
+  pose (COM directly over the edge) may still rest.
+- Rest damping only applies to stably supported bodies — it no longer stalls
+  a slow tip below the sleep threshold (the frozen-on-a-corner bug).
+- Sleeping bodies are solved as immovable until woken (no more gravity-bias
+  skating); they wake when support is lost *or* becomes unstable, and when
+  hit by energetic bodies (a tipping base re-awakens the stack above it).
+- Hard depenetration vs static top surfaces (both paths): multi-body shoves
+  can no longer tunnel bodies through floors, steps, or pads.
+- Floor-normal orientation guard: contacts past a slab's midplane can no
+  longer point the SAT normal into the floor (boxes and spheres).
+- Pure-Python and Numba paths share the rest/sleep gate — behavior parity by
+  construction; both covered by tests.
+
+### Tests
+- New regressions: corner-tilted cube settles on a face (both paths), edge
+  tilts 25–35°, upright rest, legitimate 45° edge balance, two-box stack,
+  cube dropped onto cube — all assert settled pose, rest height, low residual
+  velocity, and no NaNs.
+
+### Demos
+- Pyramid/tower: larger ground slabs, slightly grippier low-bounce boxes.
+
 ## [0.2.1] — 2026-07-18
 
 ### Performance
